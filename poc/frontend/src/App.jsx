@@ -1,16 +1,122 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
 
 const API_BASE = 'http://localhost:8000';
 
+const STATUS_ICONS = {
+  'Submitted': '⏳',
+};
+
+function timeAgo(dateString) {
+  const diffMs = Date.now() - new Date(dateString).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+function Toast({ toast, onClose }) {
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(onClose, 4000);
+    return () => clearTimeout(t);
+  }, [toast, onClose]);
+
+  if (!toast) return null;
+
+  return (
+    <div className={`toast toast-${toast.type}`} role="status">
+      <span className="toast-icon">
+        {toast.type === 'success' ? '✓' : toast.type === 'error' ? '✕' : 'ℹ'}
+      </span>
+      <span className="toast-message">{toast.message}</span>
+      <button className="toast-close" onClick={onClose} aria-label="Dismiss">
+        &times;
+      </button>
+    </div>
+  );
+}
+
+function StatCard({ label, value, tone }) {
+  return (
+    <div className={`stat-card stat-${tone}`}>
+      <div className="stat-value">{value}</div>
+      <div className="stat-label">{label}</div>
+    </div>
+  );
+}
+
+function MiniBarChart({ title, data, accent = '#2563eb' }) {
+  const maxValue = Math.max(1, ...data.map((d) => d.value));
+  const niceMax = Math.ceil(maxValue * 1.2) || 1;
+
+  return (
+    <div className="chart-card">
+      <h4 className="chart-title">{title}</h4>
+      {data.length === 0 ? (
+        <p className="chart-empty">No data yet.</p>
+      ) : (
+        <div className="chart-body">
+          {data.map((d) => {
+            const pct = (d.value / niceMax) * 100;
+            return (
+              <div key={d.label} className="chart-row">
+                <div className="chart-label" title={d.label}>
+                  {d.label}
+                </div>
+                <div className="chart-track">
+                  <div
+                    className="chart-fill"
+                    style={{ width: `${pct}%`, background: accent }}
+                  />
+                </div>
+                <div className="chart-value">{d.value}</div>
+                <div className="chart-tooltip">
+                  {d.label}: {d.value} request{d.value !== 1 ? 's' : ''}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div className="rfc-card skeleton-card">
+      <div className="skeleton-line skeleton-title" />
+      <div className="skeleton-line skeleton-sub" />
+      <div className="skeleton-badges">
+        <div className="skeleton-badge" />
+        <div className="skeleton-badge" />
+      </div>
+      <div className="skeleton-line skeleton-date" />
+    </div>
+  );
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState('list');
   const [rfcs, setRfcs] = useState([]);
+  const [listLoading, setListLoading] = useState(true);
   const [selectedRfc, setSelectedRfc] = useState(null);
   const [cabSession, setCabSession] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterType, setFilterType] = useState('All');
+  const [filterStatus, setFilterStatus] = useState('All');
+  const [visibleLogCount, setVisibleLogCount] = useState(0);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const revealTimer = useRef(null);
+
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -23,26 +129,31 @@ function App() {
     requestor_name: '',
   });
 
-  // Fetch RFC list on load
   useEffect(() => {
     fetchRfcList();
   }, []);
 
+  useEffect(() => {
+    return () => clearInterval(revealTimer.current);
+  }, []);
+
+  const showToast = (message, type = 'info') => setToast({ message, type });
+
   const fetchRfcList = async () => {
+    setListLoading(true);
     try {
       const response = await axios.get(`${API_BASE}/rfc-list`);
       setRfcs(response.data.rfcs);
     } catch (error) {
-      console.error('Error fetching RFC list:', error);
+      showToast('Unable to reach the RFC service. Confirm the backend is running.', 'error');
+    } finally {
+      setListLoading(false);
     }
   };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSubmitRfc = async (e) => {
@@ -54,14 +165,13 @@ function App() {
         ...formData,
         affected_systems: formData.affected_systems
           .split(',')
-          .map((s) => s.trim()),
-        estimated_downtime_hours: parseFloat(
-          formData.estimated_downtime_hours
-        ),
+          .map((s) => s.trim())
+          .filter(Boolean),
+        estimated_downtime_hours: parseFloat(formData.estimated_downtime_hours),
       };
 
       const response = await axios.post(`${API_BASE}/rfc/submit`, payload);
-      alert(`✅ RFC submitted: ${response.data.rfc_number}`);
+      showToast(`RFC submitted successfully — ${response.data.rfc_number}`, 'success');
       setFormData({
         title: '',
         description: '',
@@ -76,7 +186,7 @@ function App() {
       setActiveTab('list');
       fetchRfcList();
     } catch (error) {
-      alert(`❌ Error: ${error.response?.data?.detail || error.message}`);
+      showToast(error.response?.data?.detail || 'Submission failed. Please review the form and try again.', 'error');
     } finally {
       setLoading(false);
     }
@@ -87,8 +197,9 @@ function App() {
       const response = await axios.get(`${API_BASE}/rfc/${rfc_id}`);
       setSelectedRfc(response.data);
       setCabSession(null);
+      setVisibleLogCount(0);
     } catch (error) {
-      console.error('Error fetching RFC:', error);
+      showToast('Unable to load RFC details.', 'error');
     }
   };
 
@@ -97,44 +208,211 @@ function App() {
     try {
       const response = await axios.post(`${API_BASE}/rfc/${rfc_id}/trigger-cab`);
       setCabSession(response.data);
+      setVisibleLogCount(0);
+
+      const total = response.data.agent_logs.length;
+      let count = 0;
+      clearInterval(revealTimer.current);
+      revealTimer.current = setInterval(() => {
+        count += 1;
+        setVisibleLogCount(count);
+        if (count >= total) clearInterval(revealTimer.current);
+      }, 550);
     } catch (error) {
-      alert(`❌ CAB session failed: ${error.message}`);
+      showToast(`CAB session failed: ${error.message}`, 'error');
     } finally {
       setLoading(false);
     }
   };
 
+  const stats = useMemo(() => {
+    const total = rfcs.length;
+    const autoApproved = rfcs.filter((r) => /auto-approved/i.test(r.status)).length;
+    const emergency = rfcs.filter((r) => r.change_type === 'Emergency').length;
+    const pending = rfcs.filter(
+      (r) => !/auto-approved/i.test(r.status) && !/approved|rejected/i.test(r.status)
+    ).length;
+    return { total, autoApproved, emergency, pending };
+  }, [rfcs]);
+
+  const changeTypes = useMemo(
+    () => ['All', ...Array.from(new Set(rfcs.map((r) => r.change_type)))],
+    [rfcs]
+  );
+  const statuses = useMemo(
+    () => ['All', ...Array.from(new Set(rfcs.map((r) => r.status)))],
+    [rfcs]
+  );
+
+  const typeChartData = useMemo(() => {
+    const counts = {};
+    rfcs.forEach((r) => {
+      counts[r.change_type] = (counts[r.change_type] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [rfcs]);
+
+  const statusChartData = useMemo(() => {
+    const counts = {};
+    rfcs.forEach((r) => {
+      counts[r.status] = (counts[r.status] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [rfcs]);
+
+  const recentActivity = useMemo(
+    () =>
+      [...rfcs]
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        .slice(0, 6),
+    [rfcs]
+  );
+
+  const filteredRfcs = useMemo(() => {
+    return rfcs.filter((r) => {
+      const matchesQuery =
+        !searchQuery ||
+        r.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        r.rfc_number.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesType = filterType === 'All' || r.change_type === filterType;
+      const matchesStatus = filterStatus === 'All' || r.status === filterStatus;
+      return matchesQuery && matchesType && matchesStatus;
+    });
+  }, [rfcs, searchQuery, filterType, filterStatus]);
+
   return (
     <div className="app">
+      <Toast toast={toast} onClose={() => setToast(null)} />
+
       <header className="header">
-        <h1>🚀 RFC Lifecycle PoC</h1>
-        <p>AI-Powered Change Management with Virtual CAB Deliberation</p>
+        <div className="header-brand">
+          <div className="brand-mark">CAB</div>
+          <div>
+            <h1>Change Advisory Board Platform</h1>
+            <p>AI-assisted RFC classification, routing, and deliberation</p>
+          </div>
+        </div>
+        <div className="header-actions">
+          <div className="notif-wrapper">
+            {notifOpen && (
+              <div className="dropdown-backdrop" onClick={() => setNotifOpen(false)} />
+            )}
+            <button
+              className="icon-btn"
+              onClick={() => setNotifOpen((o) => !o)}
+              aria-label="Recent activity"
+            >
+              🔔
+              {recentActivity.length > 0 && <span className="notif-dot" />}
+            </button>
+            {notifOpen && (
+              <div className="notif-dropdown">
+                <div className="notif-header">Recent Activity</div>
+                {recentActivity.length === 0 ? (
+                  <div className="notif-empty">No activity yet.</div>
+                ) : (
+                  recentActivity.map((r) => (
+                    <div
+                      key={r.id}
+                      className="notif-item"
+                      onClick={() => {
+                        handleViewRfc(r.id);
+                        setActiveTab('detail');
+                        setNotifOpen(false);
+                      }}
+                    >
+                      <div className="notif-item-title">{r.title}</div>
+                      <div className="notif-item-meta">
+                        <span className="badge status-generic">{r.status}</span>
+                        <span className="notif-time">{timeAgo(r.created_at)}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+          <div className="system-status">
+            <span className="status-dot" />
+            System Operational
+          </div>
+        </div>
       </header>
 
-      <div className="tabs">
+      <nav className="tabs">
         <button
           className={`tab-btn ${activeTab === 'list' ? 'active' : ''}`}
           onClick={() => setActiveTab('list')}
         >
-          📋 RFC List
+          RFC Register
         </button>
         <button
           className={`tab-btn ${activeTab === 'submit' ? 'active' : ''}`}
           onClick={() => setActiveTab('submit')}
         >
-          ➕ Submit RFC
+          Submit Change Request
         </button>
-      </div>
+      </nav>
 
       {activeTab === 'list' && (
-        <div className="content">
+        <div className="content fade-in">
+          <div className="stats-row">
+            <StatCard label="Total RFCs" value={stats.total} tone="neutral" />
+            <StatCard label="Auto-Approved" value={stats.autoApproved} tone="success" />
+            <StatCard label="Pending Review" value={stats.pending} tone="warning" />
+            <StatCard label="Emergency Changes" value={stats.emergency} tone="danger" />
+          </div>
+
+          <div className="charts-row">
+            <MiniBarChart title="RFCs by Change Type" data={typeChartData} accent="#2563eb" />
+            <MiniBarChart title="RFCs by Status" data={statusChartData} accent="#2563eb" />
+          </div>
+
           <div className="rfc-list">
-            <h2>All RFCs</h2>
-            {rfcs.length === 0 ? (
-              <p>No RFCs yet. Create one!</p>
+            <div className="list-header">
+              <h2>Change Requests</h2>
+              <div className="filters">
+                <input
+                  type="text"
+                  className="search-input"
+                  placeholder="Search by title or RFC number..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+                  {changeTypes.map((t) => (
+                    <option key={t} value={t}>
+                      {t === 'All' ? 'All Types' : t}
+                    </option>
+                  ))}
+                </select>
+                <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+                  {statuses.map((s) => (
+                    <option key={s} value={s}>
+                      {s === 'All' ? 'All Statuses' : s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {listLoading ? (
+              <div className="rfc-cards">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <SkeletonCard key={i} />
+                ))}
+              </div>
+            ) : filteredRfcs.length === 0 ? (
+              <div className="empty-state">
+                <p>No change requests match your current filters.</p>
+              </div>
             ) : (
               <div className="rfc-cards">
-                {rfcs.map((rfc) => (
+                {filteredRfcs.map((rfc) => (
                   <div
                     key={rfc.id}
                     className="rfc-card"
@@ -146,16 +424,14 @@ function App() {
                     <h3>{rfc.title}</h3>
                     <p className="rfc-number">{rfc.rfc_number}</p>
                     <div className="rfc-meta">
-                      <span className={`badge type-${rfc.change_type}`}>
+                      <span className={`badge type-${rfc.change_type.replace(/\s/g, '')}`}>
                         {rfc.change_type}
                       </span>
-                      <span className={`badge status-${rfc.status}`}>
-                        {rfc.status}
+                      <span className="badge status-generic">
+                        {STATUS_ICONS[rfc.status] || ''} {rfc.status}
                       </span>
                     </div>
-                    <p className="rfc-date">
-                      {new Date(rfc.created_at).toLocaleString()}
-                    </p>
+                    <p className="rfc-date">{timeAgo(rfc.created_at)}</p>
                   </div>
                 ))}
               </div>
@@ -165,9 +441,12 @@ function App() {
       )}
 
       {activeTab === 'submit' && (
-        <div className="content">
+        <div className="content fade-in">
           <div className="submit-form">
-            <h2>Submit New RFC</h2>
+            <h2>Submit New Change Request</h2>
+            <p className="form-subtitle">
+              Fields marked with an asterisk are required for classification and routing.
+            </p>
             <form onSubmit={handleSubmitRfc}>
               <div className="form-group">
                 <label>RFC Title *</label>
@@ -276,12 +555,14 @@ function App() {
                 />
               </div>
 
-              <button
-                type="submit"
-                className="btn-primary"
-                disabled={loading}
-              >
-                {loading ? 'Submitting...' : '✅ Submit RFC'}
+              <button type="submit" className="btn-primary" disabled={loading}>
+                {loading ? (
+                  <span className="btn-spinner-wrap">
+                    <span className="btn-spinner" /> Submitting...
+                  </span>
+                ) : (
+                  'Submit Change Request'
+                )}
               </button>
             </form>
           </div>
@@ -289,41 +570,43 @@ function App() {
       )}
 
       {activeTab === 'detail' && selectedRfc && (
-        <div className="content">
+        <div className="content fade-in">
           <div className="rfc-detail">
-            <button
-              className="btn-back"
-              onClick={() => setActiveTab('list')}
-            >
-              ← Back to List
+            <button className="btn-back" onClick={() => setActiveTab('list')}>
+              &larr; Back to Register
             </button>
 
             <h2>{selectedRfc.title}</h2>
             <div className="detail-meta">
               <div className="meta-item">
-                <strong>RFC Number:</strong> {selectedRfc.rfc_number}
+                <strong>RFC Number</strong> {selectedRfc.rfc_number}
               </div>
               <div className="meta-item">
-                <strong>Type:</strong>{' '}
-                <span className={`badge type-${selectedRfc.change_type}`}>
+                <strong>Type</strong>
+                <span className={`badge type-${selectedRfc.change_type.replace(/\s/g, '')}`}>
                   {selectedRfc.change_type}
                 </span>
               </div>
               <div className="meta-item">
-                <strong>Status:</strong>{' '}
-                <span className={`badge status-${selectedRfc.status}`}>
-                  {selectedRfc.status}
-                </span>
+                <strong>Status</strong>
+                <span className="badge status-generic">{selectedRfc.status}</span>
               </div>
               <div className="meta-item">
-                <strong>Impact:</strong> {selectedRfc.impact}
+                <strong>Impact</strong> {selectedRfc.impact}
               </div>
               <div className="meta-item">
-                <strong>Priority:</strong> {selectedRfc.priority}
+                <strong>Priority</strong> {selectedRfc.priority}
               </div>
               {selectedRfc.risk_level && (
                 <div className="meta-item">
-                  <strong>Risk Level:</strong> {selectedRfc.risk_level}/5
+                  <strong>Risk Level</strong>
+                  <div className="risk-meter">
+                    <div
+                      className="risk-meter-fill"
+                      style={{ width: `${(selectedRfc.risk_level / 5) * 100}%` }}
+                    />
+                  </div>
+                  <span>{selectedRfc.risk_level} / 5</span>
                 </div>
               )}
             </div>
@@ -349,22 +632,22 @@ function App() {
 
             {selectedRfc.test_cases && (
               <div className="detail-section">
-                <h3>Test Cases & Results</h3>
+                <h3>Test Cases &amp; Results</h3>
                 <p>{selectedRfc.test_cases}</p>
               </div>
             )}
 
             {selectedRfc.back_out_plan && (
               <div className="detail-section">
-                <h3>Rollback/Back-Out Plan</h3>
+                <h3>Rollback / Back-Out Plan</h3>
                 <p>{selectedRfc.back_out_plan}</p>
               </div>
             )}
 
             {selectedRfc.auto_approved && (
               <div className="detail-section alert alert-success">
-                ✅ <strong>Auto-Approved:</strong> This RFC matches a Standard
-                Change Catalogue entry and was auto-approved.
+                <strong>Auto-Approved:</strong> This RFC matches a Standard Change
+                Catalogue entry and was approved automatically.
               </div>
             )}
 
@@ -376,37 +659,50 @@ function App() {
                   onClick={() => handleTriggerCab(selectedRfc.id)}
                   disabled={loading || cabSession}
                 >
-                  {loading
-                    ? '⏳ Running CAB Session...'
-                    : '🎯 Trigger AI CAB Review'}
+                  {loading ? (
+                    <span className="btn-spinner-wrap">
+                      <span className="btn-spinner" /> Convening CAB Session...
+                    </span>
+                  ) : (
+                    'Trigger AI CAB Review'
+                  )}
                 </button>
               )}
 
             {cabSession && (
               <div className="cab-session">
-                <h3>🏛️ AI CAB Deliberation Session</h3>
+                <h3>CAB Deliberation Session</h3>
                 <div className="agent-logs">
-                  {cabSession.agent_logs.map((log, idx) => (
-                    <div key={idx} className="agent-log-entry">
+                  {cabSession.agent_logs.slice(0, visibleLogCount).map((log, idx) => (
+                    <div key={idx} className="agent-log-entry log-reveal">
                       <ReactMarkdown>{log}</ReactMarkdown>
                     </div>
                   ))}
+                  {visibleLogCount < cabSession.agent_logs.length && (
+                    <div className="agent-log-entry log-typing">
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                    </div>
+                  )}
                 </div>
 
-                <div className="cab-decision-box">
-                  <h4>🎯 Final Decision: {cabSession.cab_decision}</h4>
-                  <div className="decision-reasoning">
-                    <ReactMarkdown>{cabSession.cab_reasoning}</ReactMarkdown>
+                {visibleLogCount >= cabSession.agent_logs.length && (
+                  <div className="cab-decision-box fade-in">
+                    <h4>Final Decision: {cabSession.cab_decision}</h4>
+                    <div className="decision-reasoning">
+                      <ReactMarkdown>{cabSession.cab_reasoning}</ReactMarkdown>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             )}
 
-            {selectedRfc.cab_decision && (
+            {selectedRfc.cab_decision && !cabSession && (
               <div className="cab-session">
-                <h3>🏛️ CAB Decision (Cached)</h3>
+                <h3>CAB Decision (On Record)</h3>
                 <div className="cab-decision-box">
-                  <h4>🎯 Final Decision: {selectedRfc.cab_decision}</h4>
+                  <h4>Final Decision: {selectedRfc.cab_decision}</h4>
                   <div className="decision-reasoning">
                     <ReactMarkdown>{selectedRfc.cab_reasoning}</ReactMarkdown>
                   </div>
@@ -416,6 +712,12 @@ function App() {
           </div>
         </div>
       )}
+
+      <footer className="app-footer">
+        RFC Lifecycle Platform &middot; Every classification traces to the ITIL v6.1 Change
+        Management process &middot; AI recommendations are advisory — humans retain final
+        approval authority.
+      </footer>
     </div>
   );
 }
