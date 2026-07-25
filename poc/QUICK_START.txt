@@ -1,0 +1,236 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                                                                            ║
+║         🚀 RFC LIFECYCLE PoC — QUICK START GUIDE FOR LEADERSHIP 🚀         ║
+║                                                                            ║
+║             AI-Enhanced Change Management with Human Authority             ║
+║                                                                            ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ⏱️  3-MINUTE SETUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. GET YOUR API KEY
+   → Go to https://console.anthropic.com/
+   → Create API key (copy it)
+
+2. CLONE & SETUP
+   $ cd poc
+   $ export ANTHROPIC_API_KEY="sk-ant-..."
+   $ docker-compose up --build
+
+3. OPEN BROWSER
+   → Frontend: http://localhost:3000
+   → Backend API: http://localhost:8000
+   → Both should show "✅ Ready"
+
+4. START DEMO
+   → See DEMO_WALKTHROUGH.md for full 15-min script
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🎯 WHAT THIS PoC DEMONSTRATES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ DETERMINISTIC CLASSIFICATION
+   → Change Type: Normal, Expedited, Emergency, Standard, No Impact
+   → Impact: High, Medium, Low (based on scope, downtime)
+   → Priority: Critical, High, Moderate, Low (based on service/security)
+   → Risk: 1-5 scale (based on users, outage, history)
+
+   🔒 GUARDRAIL: No LLM guessing. Rules + lookup tables only.
+
+✅ STANDARD CHANGE AUTO-APPROVAL
+   → RFC matches SCC (Standard Change Catalogue)? → Auto-approve (seconds)
+   → Otherwise → Route to human approval
+
+   🔒 GUARDRAIL: Only genuinely low-risk changes auto-approve.
+
+✅ NO IMPACT TWO-TIER APPROVAL
+   → Coordinator reviews + Manager reviews + signs off
+   → Ambiguous criteria? → Escalate to CAB (don't guess)
+
+   🔒 GUARDRAIL: Never auto-approve if uncertain.
+
+✅ AI CAB DELIBERATION
+   → 5 agents review collaboratively:
+      • Infrastructure Specialist (downtime, back-out)
+      • Application Specialist (tests, deployment)
+      • Business Owner (justification, SLA impact)
+      • Security Officer (security, VAPT)
+      • Change Manager / Chair (synthesize, decide)
+
+   → Chair makes final call: Approve / Reject / Conditional
+
+   🔒 GUARDRAIL: AI is advisory. Human decides. Human is accountable.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 📊 DEMO WALKTHROUGH (15 MINUTES)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. [1 min] OVERVIEW
+   Show the polished RFC List dashboard
+   Point out 5 pre-loaded sample RFCs
+
+2. [2 min] STANDARD CHANGE (CHG20260724001)
+   "This auto-approved because it matched the catalogue"
+   Show: Type = Standard, Status = Auto-Approved
+
+3. [2 min] NO IMPACT ESCALATION (CHG20260724003)
+   "This is ambiguous, so it escalates to humans"
+   Show: Type = No Impact, Status = Escalated to CAB
+
+4. [7 min] AI CAB DELIBERATION (CHG20260724002) ← MAIN EVENT
+   Click "🎯 Trigger AI CAB Review"
+   Watch agents deliberate in real-time:
+      Infrastructure: "Downtime is doable. Rollback risky though."
+      Application: "Tests are weak. More regression needed."
+      Business: "Good justification. SLA communicated."
+      Security: "No VAPT needed. Schema-only change."
+      Chair: "Conditional approval. Fix test coverage first."
+   Show final decision in green box.
+
+5. [1 min] CLASSIFICATION RULES
+   Show how impact/priority/risk are scored deterministically
+
+6. [1 min] CLOSE
+   "AI speeds up briefing. Humans stay in control. Next: full PIR, ServiceNow."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🎬 5 SAMPLE RFCs (PRE-LOADED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CHG20260724001 - User Account Creation
+   Type: Standard
+   Status: ✅ Auto-Approved (matches SCC)
+   Use case: Show quick approval
+
+CHG20260724002 - Database Schema Migration ⭐ (MAIN DEMO)
+   Type: Normal
+   Impact: 1-High, Priority: High, Risk: 3/5
+   Use case: Trigger CAB, watch agents deliberate
+
+CHG20260724003 - Application Logging Update
+   Type: No Impact
+   Status: Escalated to CAB (ambiguous criteria)
+   Use case: Show escalation logic
+
+CHG20260724004 - Production Cache Failure (Emergency)
+   Type: Emergency
+   Impact: 1-High, Priority: Critical, Risk: 5/5
+   Use case: Show emergency process
+
+CHG20260724005 - Payment Service v2 Deployment
+   Type: Normal (Complex)
+   Impact: 1-High, Priority: Critical, Risk: 5/5
+   Use case: Show high-risk change handling
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 💡 KEY TALKING POINTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+"Standard changes approve in SECONDS, not DAYS"
+"We never guess — ambiguous cases escalate to humans"
+"5 AI agents think like your real CAB members"
+"Every rule traces to the ITIL process document"
+"Humans make all approval decisions — AI is advisory"
+"Full audit trail — every decision logged and accountable"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 📋 WHAT TO SHOW LEADERSHIP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ SPEED
+   Show: Standard change goes from "Draft" to "Approved" in seconds
+   Normal change: Classification in <1 second, CAB briefing in <1 minute
+
+✅ CONSISTENCY
+   Show: Same RFC classified the same way every time (no human variance)
+   Point out: Rules are deterministic, not opinion-based
+
+✅ SAFETY
+   Show: Normal/Expedited/Emergency never auto-approve (human always decides)
+   Point out: Ambiguous classifications escalate (never guess)
+
+✅ COMPLIANCE
+   Show: Every rule has a source doc reference (ITIL Section X.Y)
+   Point out: Audit trail is immutable (non-repudiation)
+
+✅ INTELLIGENCE
+   Show: CAB agents coordinate review in <1 minute
+   Point out: Multiple perspectives, structured synthesis
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🔧 QUICK TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+"I can't see the frontend"
+  → Check: http://localhost:3000 is loading
+  → If blank: Check browser console (F12) for errors
+  → Backend URL wrong? Edit frontend/.env
+
+"I can't reach the API"
+  → Check: http://localhost:8000/health returns {"status":"ok"}
+  → If error: Backend not running. Run 'python main.py'
+
+"CAB session is slow"
+  → Normal: Claude API calls take 30–60 seconds
+  → Check: Backend logs for errors
+  → Retry: Click button again after 1 minute
+
+"No sample RFCs visible"
+  → Run: python db_init.py (in backend/)
+  → Then: Restart backend and refresh frontend
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 📚 DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+README.md
+  → Full setup guide
+  → API endpoints
+  → Classification rules
+  → Customization guide
+
+DEMO_WALKTHROUGH.md
+  → 15-minute demo script (word-for-word)
+  → Q&A talking points
+  → Timing reference
+
+SETUP_CHECKLIST.md
+  → Pre-demo checklist
+  → Troubleshooting
+  → Demo day prep
+
+SUMMARY.md
+  → High-level overview
+  → Architecture explanation
+  → Design principles
+
+THIS FILE
+  → Quick reference (you're reading it!)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🎯 SUCCESS =
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After 15-minute demo, leadership should understand:
+
+✅ What the PoC does (deterministic + AI-augmented change management)
+✅ Why it matters (speed, consistency, safety, compliance)
+✅ How it works (classify → route → brief → approve)
+✅ What happens next (full PIR, ServiceNow integration, KPI dashboard)
+✅ Risk mitigation (humans always approve risky changes, audit trail)
+
+Decision point: "Should we proceed to full build-out?"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🚀 YOU'RE READY!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Next step: Follow SETUP_CHECKLIST.md and run the demo.
+
+Questions? See README.md or reach out.
+
+Built for leadership confidence and technical credibility.
+
+RFC Lifecycle PoC v1.0 | Quick Start | July 2026
