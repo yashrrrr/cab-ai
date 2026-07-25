@@ -5,6 +5,54 @@ import './App.css';
 
 const API_BASE = 'http://localhost:8000';
 
+// Display order for flag groups (raw concatenation, grouped by agent)
+const AGENT_ORDER = ['Infrastructure', 'Application', 'Business', 'Security', 'Chair'];
+const SEV_ORDER = { 'Must-fix': 0, 'Should-fix': 1, 'Nice-to-have': 2 };
+
+function FlagsPanel({ flags }) {
+  const list = Array.isArray(flags) ? flags : [];
+  return (
+    <div className="flags-panel">
+      <h3>🚩 Required Changes & Recommendations</h3>
+      {list.length === 0 ? (
+        <p className="flags-empty">No required changes flagged.</p>
+      ) : (
+        AGENT_ORDER.map((agent) => {
+          const group = list
+            .filter((f) => f.raised_by === agent)
+            .sort(
+              (a, b) =>
+                (SEV_ORDER[a.severity] ?? 3) - (SEV_ORDER[b.severity] ?? 3)
+            );
+          if (group.length === 0) return null;
+          return (
+            <div key={agent} className="flag-group">
+              <h4>{agent}</h4>
+              {group.map((f, i) => (
+                <div key={i} className="flag-item">
+                  <div className="flag-head">
+                    <span
+                      className={`sev-badge sev-${(f.severity || '').replace(
+                        /[^a-zA-Z]/g,
+                        ''
+                      )}`}
+                    >
+                      {f.severity}
+                    </span>
+                    <span className="flag-category">{f.category}</span>
+                    <span className="flag-element">{f.affected_element}</span>
+                  </div>
+                  <p className="flag-rec">{f.recommendation}</p>
+                </div>
+              ))}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState('list');
   const [rfcs, setRfcs] = useState([]);
@@ -399,6 +447,8 @@ function App() {
                     <ReactMarkdown>{cabSession.cab_reasoning}</ReactMarkdown>
                   </div>
                 </div>
+
+                <FlagsPanel flags={cabSession.cab_flags} />
               </div>
             )}
 
@@ -411,6 +461,8 @@ function App() {
                     <ReactMarkdown>{selectedRfc.cab_reasoning}</ReactMarkdown>
                   </div>
                 </div>
+
+                <FlagsPanel flags={selectedRfc.cab_flags} />
               </div>
             )}
           </div>

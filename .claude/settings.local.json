@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(docker-compose --version)",
-      "Bash(python db_init.py)"
+      "Bash(python db_init.py)",
+      "Bash(python3 \"C:/Users/soniy/Desktop/arch-bmad/_bmad/scripts/resolve_customization.py\" --skill \"C:/Users/soniy/Desktop/arch-bmad/.claude/skills/bmad-agent-analyst\" --key agent)",
+      "Bash(python \"C:/Users/soniy/Desktop/arch-bmad/_bmad/scripts/resolve_customization.py\" --skill \"C:/Users/soniy/Desktop/arch-bmad/.claude/skills/bmad-quick-dev\" --key workflow)"
     ]
   }
 }

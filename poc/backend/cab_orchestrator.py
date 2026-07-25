@@ -109,10 +109,129 @@ If VAPT is needed, recommend it. Don't guess on security—escalate when uncerta
 }
 
 # ─────────────────────────────────────────────────────────────
+# Recommendation Flags — vocabulary + instruction
+# ─────────────────────────────────────────────────────────────
+
+VALID_SEVERITIES = {"Must-fix", "Should-fix", "Nice-to-have"}
+VALID_CATEGORIES = {
+    "Access/Permissions", "Testing", "Rollback/Recovery",
+    "Communication/SLA", "Compliance/Security", "Infrastructure", "Other",
+}
+SEVERITY_ORDER = {"Must-fix": 0, "Should-fix": 1, "Nice-to-have": 2}
+
+# Short label each agent is tagged with, in display order (raw concatenation)
+RAISED_BY_BY_AGENT = {
+    "infrastructure": "Infrastructure",
+    "application": "Application",
+    "business": "Business",
+    "security": "Security",
+    "chair": "Chair",
+}
+RAISED_BY_ORDER = ["Infrastructure", "Application", "Business", "Security", "Chair"]
+
+FLAG_INSTRUCTION = """
+---
+After your assessment, if (and ONLY if) you have concrete required changes or recommendations, output on a NEW final line the token FLAGS: followed by a JSON array. Each item MUST be:
+{"severity": "Must-fix" | "Should-fix" | "Nice-to-have",
+ "category": "Access/Permissions" | "Testing" | "Rollback/Recovery" | "Communication/SLA" | "Compliance/Security" | "Infrastructure" | "Other",
+ "affected_element": "<specific system/component/permission/button>",
+ "recommendation": "<one concrete actionable change>"}
+Use "Must-fix" only for changes that must happen BEFORE this change can be approved. If you have no flags, output exactly: FLAGS: []
+"""
+
+
+def parse_flags(text: str, raised_by: str):
+    """
+    Split an agent response into (prose_without_flags, flags_list).
+    Robust: missing/malformed/empty FLAGS block yields (original_prose, []).
+    Never raises.
+    """
+    if not text or "FLAGS:" not in text:
+        return (text or ""), []
+
+    idx = text.rfind("FLAGS:")
+    prose = text[:idx].rstrip()
+    raw = text[idx + len("FLAGS:"):].strip()
+
+    # Locate the array start, then decode ONLY the JSON value (raw_decode stops
+    # at the end of the array, ignoring any trailing prose that may contain ']').
+    start = raw.find("[")
+    if start == -1:
+        # No array after the token — keep the ORIGINAL prose untouched (avoid truncation)
+        return text, []
+
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
+    except Exception:
+        # Could not extract a valid array — do not truncate prose
+        return text, []
+
+    if not isinstance(parsed, list):
+        return text, []
+
+    def _clean_str(value, default=""):
+        return value.strip() if isinstance(value, str) else default
+
+    flags = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        recommendation = _clean_str(item.get("recommendation"))
+        if not recommendation:
+            continue
+        severity = item.get("severity")
+        if not isinstance(severity, str) or severity not in VALID_SEVERITIES:
+            severity = "Nice-to-have"
+        category = item.get("category")
+        if not isinstance(category, str) or category not in VALID_CATEGORIES:
+            category = "Other"
+        flags.append({
+            "raised_by": raised_by,
+            "severity": severity,
+            "category": category,
+            "affected_element": _clean_str(item.get("affected_element"), "N/A") or "N/A",
+            "recommendation": recommendation,
+        })
+
+    return prose, flags
+
+
+def sort_flags(flags):
+    """Group by agent (fixed order), Must-fix first within each group. No de-duplication."""
+    ordered = []
+    for label in RAISED_BY_ORDER:
+        group = [f for f in flags if f["raised_by"] == label]
+        group.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 3))
+        ordered.extend(group)
+    return ordered
+
+
+def format_flags_block(flags) -> str:
+    """Render the Required Changes block for the deliberation log, grouped by agent."""
+    header = "\n🚩 REQUIRED CHANGES & RECOMMENDATIONS"
+    if not flags:
+        return header + "\n\n_No required changes flagged._"
+
+    lines = [header]
+    for label in RAISED_BY_ORDER:
+        group = [f for f in flags if f["raised_by"] == label]
+        if not group:
+            continue
+        group.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 3))
+        lines.append(f"\n**{label}**")
+        for f in group:
+            lines.append(
+                f"- `{f['severity']}` · {f['category']} — "
+                f"{f['affected_element']}: {f['recommendation']}"
+            )
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────
 # CAB Session Orchestrator
 # ─────────────────────────────────────────────────────────────
 
-def run_ai_cab_session(rfc_data: Dict) -> Tuple[str, str, List[str]]:
+def run_ai_cab_session(rfc_data: Dict) -> Tuple[str, str, List[str], List[Dict]]:
     """
     Run an AI CAB session for the given RFC using OpenAI GPT-4o.
 
@@ -122,13 +241,19 @@ def run_ai_cab_session(rfc_data: Dict) -> Tuple[str, str, List[str]]:
     3. Chair synthesizes and makes decision
     4. Chair issues final decision (Approve/Reject/Conditional)
 
+    Each agent may also emit zero or more recommendation flags. All flags are
+    collected verbatim (raw concatenation, grouped by agent). Any Must-fix flag
+    caps a would-be "Approved" decision to "Conditional Approval".
+
     Returns:
-    - cab_decision: "Approved" | "Rejected" | "Conditional Approval"
+    - cab_decision: "Approved" | "Rejected" | "Conditional Approval" | ...
     - cab_reasoning: Detailed reasoning from chair
     - agent_logs: List of agent statements for UI display
+    - flags: List of recommendation flag dicts (sorted by agent, Must-fix first)
     """
 
     agent_logs = []
+    all_flags = []
 
     # Format RFC for agents
     rfc_summary = format_rfc_summary(rfc_data)
@@ -143,21 +268,33 @@ def run_ai_cab_session(rfc_data: Dict) -> Tuple[str, str, List[str]]:
     specialist_opinions = {}
 
     for specialist in ["infrastructure", "application", "business", "security"]:
-        opinion = get_specialist_opinion(
+        raw_opinion = get_specialist_opinion(
             specialist, rfc_data, rfc_summary, specialist_opinions
         )
+        # Separate prose from structured flags; prose (flags stripped) drives discussion
+        opinion, flags = parse_flags(raw_opinion, RAISED_BY_BY_AGENT[specialist])
         specialist_opinions[specialist] = opinion
+        all_flags.extend(flags)
         agent_name = AGENT_PERSONAS[specialist]["name"]
         agent_logs.append(f"\n🔍 {agent_name.upper()}:\n{opinion}")
 
     # Step 3: Chair synthesizes and decides
-    synthesis = synthesize_decision(rfc_data, specialist_opinions, rfc_summary)
+    raw_synthesis = synthesize_decision(rfc_data, specialist_opinions, rfc_summary)
+    synthesis, chair_flags = parse_flags(raw_synthesis, RAISED_BY_BY_AGENT["chair"])
+    all_flags.extend(chair_flags)
     agent_logs.append(f"\n📋 CHANGE MANAGER (SYNTHESIS):\n{synthesis}")
 
-    # Step 4: Parse decision
+    # Step 4: Parse decision, then apply the Must-fix cap
     cab_decision, cab_reasoning = parse_decision(synthesis)
+    has_must_fix = any(f["severity"] == "Must-fix" for f in all_flags)
+    if has_must_fix and cab_decision == "Approved":
+        cab_decision = "Conditional Approval"
 
-    return cab_decision, cab_reasoning, agent_logs
+    # Step 5: Aggregate flags (raw concatenation) and append the required-changes block
+    flags = sort_flags(all_flags)
+    agent_logs.append(format_flags_block(flags))
+
+    return cab_decision, cab_reasoning, agent_logs, flags
 
 # ─────────────────────────────────────────────────────────────
 # Helper: Format RFC Summary
@@ -221,7 +358,7 @@ Raise concerns, ask questions, and provide recommendations.
 
 RFC SUMMARY:
 {rfc_summary}
-
+{FLAG_INSTRUCTION}
 Your assessment:"""
 
     response = client.chat.completions.create(
@@ -270,7 +407,7 @@ Now synthesize these opinions and make a final decision on the RFC.
 
 RFC SUMMARY:
 {rfc_summary}
-
+{FLAG_INSTRUCTION}
 Your decision (include: decision, key concerns, conditions/blockers, recommendations):"""
 
     response = client.chat.completions.create(

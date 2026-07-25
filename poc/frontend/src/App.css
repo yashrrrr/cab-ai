@@ -496,6 +496,101 @@ body {
 }
 
 /* ─────────────────────────────────────────────────────────────
+   Required Changes & Recommendations (Flags Panel)
+   ───────────────────────────────────────────────────────────── */
+
+.flags-panel {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  border: 2px solid #f0ad4e;
+  margin-top: 20px;
+}
+
+.flags-panel h3 {
+  color: #c77c11;
+  margin-bottom: 14px;
+  font-size: 1.15em;
+}
+
+.flags-empty {
+  color: #888;
+  font-style: italic;
+}
+
+.flag-group {
+  margin-bottom: 16px;
+}
+
+.flag-group h4 {
+  color: #667eea;
+  font-weight: 700;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 4px;
+}
+
+.flag-item {
+  background: #fafafa;
+  border-left: 4px solid #f0ad4e;
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.flag-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.sev-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.75em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: white;
+}
+
+.sev-Mustfix {
+  background: #dc3545;
+}
+
+.sev-Shouldfix {
+  background: #f0ad4e;
+}
+
+.sev-Nicetohave {
+  background: #6c9bd1;
+}
+
+.flag-category {
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #555;
+  background: #eef0f6;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.flag-element {
+  font-size: 0.85em;
+  color: #777;
+  font-style: italic;
+}
+
+.flag-rec {
+  color: #333;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ─────────────────────────────────────────────────────────────
    Responsive Design
    ───────────────────────────────────────────────────────────── */
 

@@ -33,7 +33,8 @@ def init_db(db_path: str = "rfc_poc.db"):
             test_cases TEXT,
             back_out_plan TEXT,
             business_justification TEXT,
-            estimated_downtime_hours REAL
+            estimated_downtime_hours REAL,
+            cab_flags TEXT
         )
     """)
 
@@ -67,6 +68,40 @@ def init_db(db_path: str = "rfc_poc.db"):
     conn.close()
 
     print(f"[OK] Database initialized: {db_path}")
+
+def migrate_db(db_path: str = "rfc_poc.db"):
+    """
+    Apply idempotent schema migrations to an existing database.
+    Safe to run on every startup — only adds what is missing.
+    """
+
+    if not os.path.isabs(db_path):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        db_path = os.path.join(script_dir, db_path)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+
+        existing_columns = [row[1] for row in cursor.execute("PRAGMA table_info(change_requests)")]
+        if not existing_columns:
+            # Table missing (empty/partial DB file) — create the full schema, then done
+            conn.close()
+            init_db(db_path)
+            return
+
+        # Add cab_flags column if it does not exist yet
+        if "cab_flags" not in existing_columns:
+            try:
+                cursor.execute("ALTER TABLE change_requests ADD COLUMN cab_flags TEXT")
+                print("[OK] Migration: added cab_flags column")
+            except sqlite3.OperationalError:
+                # Another process added it concurrently ("duplicate column name") — safe to ignore
+                pass
+
+        conn.commit()
+    finally:
+        conn.close()
 
 def get_db_connection(db_path: str = "rfc_poc.db") -> sqlite3.Connection:
     """Get database connection"""
@@ -342,4 +377,5 @@ RISK: Medium (well-tested fallback, clear rollback path)""",
 
 if __name__ == "__main__":
     init_db()
+    migrate_db()
     insert_sample_rfcs()

@@ -16,7 +16,7 @@ import os
 
 from cab_orchestrator import run_ai_cab_session
 from classification import classify_rfc, evaluate_no_impact, match_scc
-from db_init import init_db, get_db_connection
+from db_init import init_db, migrate_db, get_db_connection
 
 # ─────────────────────────────────────────────────────────────
 # FastAPI App Setup
@@ -92,6 +92,7 @@ class RFCResponse(BaseModel):
     implementation_plan: Optional[str] = None
     test_cases: Optional[str] = None
     back_out_plan: Optional[str] = None
+    cab_flags: Optional[List[dict]] = None
 
 class CABSessionRequest(BaseModel):
     rfc_id: str
@@ -106,6 +107,8 @@ async def startup():
     db_path = os.path.join(os.path.dirname(__file__), "rfc_poc.db")
     if not os.path.exists(db_path):
         init_db(db_path)
+    # Apply idempotent migrations even when the DB already exists (adds cab_flags)
+    migrate_db(db_path)
 
 # ─────────────────────────────────────────────────────────────
 # Endpoints
@@ -230,6 +233,16 @@ async def get_rfc(rfc_id: str):
         except Exception:
             affected_systems = [s.strip() for s in row[14].split(',') if s.strip()]
 
+    cab_flags = []
+    try:
+        raw_flags = row["cab_flags"]
+        if raw_flags:
+            parsed_flags = json.loads(raw_flags)
+            if isinstance(parsed_flags, list):
+                cab_flags = parsed_flags
+    except Exception:
+        cab_flags = []
+
     return RFCResponse(
         id=row[0],
         rfc_number=row[1],
@@ -250,7 +263,8 @@ async def get_rfc(rfc_id: str):
         test_cases=row[16],
         back_out_plan=row[17],
         business_justification=row[18],
-        estimated_downtime_hours=row[19]
+        estimated_downtime_hours=row[19],
+        cab_flags=cab_flags
     )
 
 @app.post("/rfc/{rfc_id}/trigger-cab")
@@ -295,18 +309,18 @@ async def trigger_cab_review(rfc_id: str):
 
     # Run AI CAB session
     try:
-        cab_decision, cab_reasoning, agent_logs = run_ai_cab_session(rfc_data)
+        cab_decision, cab_reasoning, agent_logs, cab_flags = run_ai_cab_session(rfc_data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"CAB session failed: {str(e)}")
 
-    # Update DB with decision
+    # Update DB with decision + flags
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE change_requests
-        SET status = ?, cab_decision = ?, cab_reasoning = ?
+        SET status = ?, cab_decision = ?, cab_reasoning = ?, cab_flags = ?
         WHERE id = ?
-    """, ("CAB Reviewed", cab_decision, cab_reasoning, rfc_id))
+    """, ("CAB Reviewed", cab_decision, cab_reasoning, json.dumps(cab_flags), rfc_id))
     conn.commit()
     conn.close()
 
@@ -315,6 +329,7 @@ async def trigger_cab_review(rfc_id: str):
         "cab_decision": cab_decision,
         "cab_reasoning": cab_reasoning,
         "agent_logs": agent_logs,
+        "cab_flags": cab_flags,
         "status": "CAB Reviewed"
     }
 
