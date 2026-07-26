@@ -1,5 +1,9 @@
 # Deferred Work
 
 - source_spec: `spec-per-agent-recommendation-flags.md`
-  summary: `classify_rfc` is misused in `main.py` submit_rfc — it returns a 4-tuple but is assigned to `change_type` and separately unpacked into 3 vars, raising ValueError on any RFC submitted without an explicit change_type.
-  evidence: Pre-existing bug surfaced (not caused) during flags work. `classification.py:classify_rfc` returns `(change_type, impact, priority, risk_level)`; `main.py` `submit_rfc` does `req.change_type = classify_rfc(...)` then `impact, priority, risk_level = classify_rfc(...)`. The second line unpacks 4 values into 3 → `ValueError: too many values to unpack`. Pre-loaded/seeded RFCs work (inserted directly), masking it. Explicitly out of scope for the flags feature.
+  summary: `rfc_number` collisions — `submit_rfc` derives `rfc_number` from the last 8 digits of `datetime.now().timestamp()`, so two RFCs submitted within the same second hit `UNIQUE constraint failed: change_requests.rfc_number` (HTTP 500).
+  evidence: Pre-existing bug surfaced (not caused) while integration-testing the classify_rfc fix. `main.py` submit_rfc: `rfc_number = f"CHG{str(int(datetime.now().timestamp()))[-8:]}"`. Two rapid submissions collide. Fix idea: append a short uuid suffix or a per-second counter, or use a DB sequence. Out of scope for the flags feature.
+
+## Resolved
+
+- `classify_rfc` unpacking bug in `main.py` submit_rfc — FIXED 2026-07-26. `classify_rfc` returns a 4-tuple; submit_rfc now calls it once and unpacks `(classified_type, impact, priority, risk_level)`, converting the type to `ChangeTypeEnum` only when the requestor didn't supply one. Verified via FastAPI TestClient (auto-classify + explicit-type + GET round-trip).

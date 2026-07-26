@@ -133,20 +133,17 @@ async def submit_rfc(req: RFCSubmissionRequest):
     rfc_id = str(uuid.uuid4())
     rfc_number = f"CHG{str(int(datetime.now().timestamp()))[-8:]}"
 
-    # Auto-classify if not provided
-    if req.change_type is None:
-        req.change_type = classify_rfc(
-            description=req.description,
-            affected_systems=req.affected_systems,
-            downtime=req.estimated_downtime_hours
-        )
-
-    # Score impact, priority, risk
-    impact, priority, risk_level = classify_rfc(
+    # Classify change type + score impact/priority/risk in a single pass
+    classified_type, impact, priority, risk_level = classify_rfc(
         description=req.description,
         affected_systems=req.affected_systems,
-        downtime=req.estimated_downtime_hours
+        downtime=req.estimated_downtime_hours,
+        test_cases=req.test_cases
     )
+
+    # Auto-classify change type only if the requestor didn't specify one
+    if req.change_type is None:
+        req.change_type = ChangeTypeEnum(classified_type)
 
     # Check if Standard change (auto-approve if matched to SCC)
     scc_match = match_scc(req.title, req.affected_systems)
