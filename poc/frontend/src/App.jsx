@@ -11,6 +11,11 @@ import {
 
 const API_BASE = 'http://localhost:8001';
 
+// Matches the --accent CSS variable in App.css. Chart bars are drawn with an
+// inline style (not a CSS class), so this is the one JS-side color constant
+// kept in sync with the theme's brand accent.
+const ACCENT_TEAL = '#0f6e56';
+
 const STATUS_ICONS = {
   'Submitted': '⏳',
 };
@@ -57,7 +62,7 @@ function StatCard({ label, value, tone }) {
   );
 }
 
-function MiniBarChart({ title, data, accent = '#2563eb' }) {
+function MiniBarChart({ title, data, accent = ACCENT_TEAL }) {
   const maxValue = Math.max(1, ...data.map((d) => d.value));
   const niceMax = Math.ceil(maxValue * 1.2) || 1;
 
@@ -244,7 +249,18 @@ function DecisionBadge({ decision }) {
   );
 }
 
+const THEME_STORAGE_KEY = 'ust-theme';
+
+function getInitialTheme() {
+  const saved = localStorage.getItem(THEME_STORAGE_KEY);
+  if (saved === 'light' || saved === 'dark') return saved;
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+    ? 'dark'
+    : 'light';
+}
+
 function App() {
+  const [theme, setTheme] = useState(getInitialTheme);
   const [activeTab, setActiveTab] = useState('list');
   const [rfcs, setRfcs] = useState([]);
   const [listLoading, setListLoading] = useState(true);
@@ -279,6 +295,13 @@ function App() {
     // fetchRfcList is stable for our purposes; run once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
 
   useEffect(() => {
     return () => clearInterval(revealTimer.current);
@@ -509,13 +532,21 @@ function App() {
 
       <header className="header">
         <div className="header-brand">
-          <div className="brand-mark">CAB</div>
+          <img className="brand-logo" src="/assets/ust-logo.svg" alt="UST logo" />
           <div>
             <h1>Change Advisory Board Platform</h1>
             <p>AI-assisted RFC classification, routing, and deliberation</p>
           </div>
         </div>
         <div className="header-actions">
+          <button
+            className="icon-btn theme-toggle-btn"
+            onClick={toggleTheme}
+            aria-label="Toggle light/dark theme"
+            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          >
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
           <div className="notif-wrapper">
             {notifOpen && (
               <div className="dropdown-backdrop" onClick={() => setNotifOpen(false)} />
@@ -583,8 +614,8 @@ function App() {
           </div>
 
           <div className="charts-row">
-            <MiniBarChart title="RFCs by Change Type" data={typeChartData} accent="#2563eb" />
-            <MiniBarChart title="RFCs by Status" data={statusChartData} accent="#2563eb" />
+            <MiniBarChart title="RFCs by Change Type" data={typeChartData} accent={ACCENT_TEAL} />
+            <MiniBarChart title="RFCs by Status" data={statusChartData} accent={ACCENT_TEAL} />
           </div>
 
           <div className="rfc-list">
