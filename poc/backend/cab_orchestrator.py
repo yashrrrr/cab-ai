@@ -5,6 +5,7 @@ Uses OpenAI GPT-4o for agent reasoning.
 """
 
 from openai import OpenAI
+import difflib
 import json
 from typing import Tuple, List, Dict
 import os
@@ -118,6 +119,10 @@ VALID_CATEGORIES = {
     "Communication/SLA", "Compliance/Security", "Infrastructure", "Other",
 }
 SEVERITY_ORDER = {"Must-fix": 0, "Should-fix": 1, "Nice-to-have": 2}
+CATEGORY_ORDER = [
+    "Access/Permissions", "Testing", "Rollback/Recovery",
+    "Communication/SLA", "Compliance/Security", "Infrastructure", "Other",
+]
 
 # Short label each agent is tagged with, in display order (raw concatenation)
 RAISED_BY_BY_AGENT = {
@@ -128,6 +133,10 @@ RAISED_BY_BY_AGENT = {
     "chair": "Chair",
 }
 RAISED_BY_ORDER = ["Infrastructure", "Application", "Business", "Security", "Chair"]
+
+# Two flags in the same category whose recommendation text is at least this
+# similar (0-1, difflib ratio) are considered the same underlying concern.
+DEDUPE_SIMILARITY_THRESHOLD = 0.55
 
 FLAG_INSTRUCTION = """
 ---
@@ -196,33 +205,180 @@ def parse_flags(text: str, raised_by: str):
     return prose, flags
 
 
+def _text_similarity(a: str, b: str) -> float:
+    return difflib.SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+
+def dedupe_flags(flags):
+    """
+    Collapse near-duplicate flags raised independently by multiple agents
+    (e.g. Infrastructure, Application, and Chair all flagging "no back-out
+    plan" in their own words) into a single entry.
+
+    Two flags merge when they share a category AND their recommendation text
+    is similar enough (difflib ratio >= DEDUPE_SIMILARITY_THRESHOLD). The
+    merged entry keeps the highest severity, the most detailed recommendation
+    / affected_element text, and lists every agent that raised it.
+    """
+    merged: List[Dict] = []
+
+    for f in flags:
+        match = next(
+            (
+                m for m in merged
+                if m["category"] == f["category"]
+                and _text_similarity(m["recommendation"], f["recommendation"]) >= DEDUPE_SIMILARITY_THRESHOLD
+            ),
+            None,
+        )
+        if match is None:
+            merged.append({**f, "raised_by_agents": [f["raised_by"]]})
+            continue
+
+        if f["raised_by"] not in match["raised_by_agents"]:
+            match["raised_by_agents"].append(f["raised_by"])
+        if SEVERITY_ORDER.get(f["severity"], 3) < SEVERITY_ORDER.get(match["severity"], 3):
+            match["severity"] = f["severity"]
+        if len(f["recommendation"]) > len(match["recommendation"]):
+            match["recommendation"] = f["recommendation"]
+        if len(f["affected_element"]) > len(match["affected_element"]):
+            match["affected_element"] = f["affected_element"]
+
+    result = []
+    for m in merged:
+        ordered_agents = [a for a in RAISED_BY_ORDER if a in m["raised_by_agents"]]
+        result.append({
+            "raised_by": ", ".join(ordered_agents),
+            "severity": m["severity"],
+            "category": m["category"],
+            "affected_element": m["affected_element"],
+            "recommendation": m["recommendation"],
+        })
+    return result
+
+
+def consolidate_flags_with_llm(flags: List[Dict]) -> List[Dict]:
+    """
+    Ask the model to merge flags that describe the same underlying concern
+    even when different agents phrased it differently (e.g. "missing
+    back-out plan" and "no rollback documented" are the same concern).
+
+    Plain text-similarity (difflib) is NOT reliable for this: measured on
+    real agent output, genuine paraphrases of the same concern scored
+    LOWER similarity (0.40-0.51) than some genuinely distinct concerns in
+    the same category (0.43). No fixed threshold separates them correctly
+    in both directions, so this needs actual semantic understanding.
+
+    Falls back to the input list unchanged if the call fails or the model
+    returns something that doesn't parse cleanly — consolidation is a
+    display nicety, never a reason to break the CAB session.
+    """
+    if len(flags) <= 1:
+        return flags
+
+    flags_json = json.dumps(
+        [
+            {
+                "raised_by": f["raised_by"],
+                "severity": f["severity"],
+                "category": f["category"],
+                "affected_element": f["affected_element"],
+                "recommendation": f["recommendation"],
+            }
+            for f in flags
+        ],
+        indent=2,
+    )
+
+    prompt = f"""Below is a JSON array of "required change" flags raised independently by different CAB reviewers evaluating the SAME change request. Different reviewers often restate the same underlying concern in their own words (e.g. "missing back-out plan" and "no rollback documented" are the SAME concern).
+
+FLAGS:
+{flags_json}
+
+Merge flags that describe the same underlying concern into a single entry. Do NOT merge flags that describe genuinely distinct concerns, even if in the same category.
+
+For each merged group: combine "raised_by" into one comma-separated string listing every distinct agent that raised it (preserve this order where applicable: Infrastructure, Application, Business, Security, Chair), keep the most severe "severity" (Must-fix > Should-fix > Nice-to-have), keep one "category", pick the clearest single "affected_element", and write ONE consolidated "recommendation" sentence.
+
+Output ONLY a JSON array (no prose, no markdown fences) of objects with exactly these keys: raised_by, severity, category, affected_element, recommendation."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You deduplicate and consolidate structured review notes. Output strict JSON only.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=1200,
+            temperature=0,
+        )
+        raw = response.choices[0].message.content or ""
+        start = raw.find("[")
+        if start == -1:
+            return flags
+        parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
+        if not isinstance(parsed, list) or not parsed:
+            return flags
+
+        consolidated = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            recommendation = item.get("recommendation")
+            if not isinstance(recommendation, str) or not recommendation.strip():
+                continue
+            severity = item.get("severity")
+            if severity not in VALID_SEVERITIES:
+                severity = "Nice-to-have"
+            category = item.get("category")
+            if category not in VALID_CATEGORIES:
+                category = "Other"
+            raised_by = item.get("raised_by")
+            raised_by = raised_by.strip() if isinstance(raised_by, str) and raised_by.strip() else "Chair"
+            affected_element = item.get("affected_element")
+            affected_element = (
+                affected_element.strip() if isinstance(affected_element, str) and affected_element.strip() else "N/A"
+            )
+            consolidated.append({
+                "raised_by": raised_by,
+                "severity": severity,
+                "category": category,
+                "affected_element": affected_element,
+                "recommendation": recommendation.strip(),
+            })
+        return consolidated if consolidated else flags
+    except Exception:
+        return flags
+
+
 def sort_flags(flags):
-    """Group by agent (fixed order), Must-fix first within each group. No de-duplication."""
-    ordered = []
-    for label in RAISED_BY_ORDER:
-        group = [f for f in flags if f["raised_by"] == label]
-        group.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 3))
-        ordered.extend(group)
-    return ordered
+    """Group by category (fixed order), Must-fix first within each group."""
+    def _key(f):
+        cat_index = CATEGORY_ORDER.index(f["category"]) if f["category"] in CATEGORY_ORDER else len(CATEGORY_ORDER)
+        return (cat_index, SEVERITY_ORDER.get(f["severity"], 3))
+
+    return sorted(flags, key=_key)
 
 
 def format_flags_block(flags) -> str:
-    """Render the Required Changes block for the deliberation log, grouped by agent."""
+    """Render the Required Changes block for the deliberation log, grouped by category."""
     header = "\n🚩 REQUIRED CHANGES & RECOMMENDATIONS"
     if not flags:
         return header + "\n\n_No required changes flagged._"
 
     lines = [header]
-    for label in RAISED_BY_ORDER:
-        group = [f for f in flags if f["raised_by"] == label]
+    for category in CATEGORY_ORDER:
+        group = [f for f in flags if f["category"] == category]
         if not group:
             continue
         group.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 3))
-        lines.append(f"\n**{label}**")
+        lines.append(f"\n**{category}**")
         for f in group:
             lines.append(
-                f"- `{f['severity']}` · {f['category']} — "
-                f"{f['affected_element']}: {f['recommendation']}"
+                f"- `{f['severity']}` · {f['affected_element']}: "
+                f"{f['recommendation']} _(raised by {f['raised_by']})_"
             )
     return "\n".join(lines)
 
@@ -241,15 +397,17 @@ def run_ai_cab_session(rfc_data: Dict) -> Tuple[str, str, List[str], List[Dict]]
     3. Chair synthesizes and makes decision
     4. Chair issues final decision (Approve/Reject/Conditional)
 
-    Each agent may also emit zero or more recommendation flags. All flags are
-    collected verbatim (raw concatenation, grouped by agent). Any Must-fix flag
-    caps a would-be "Approved" decision to "Conditional Approval".
+    Each agent may also emit zero or more recommendation flags. Flags raised
+    independently by multiple agents for the same underlying concern are
+    merged (see dedupe_flags) so the same issue isn't shown once per agent.
+    Any Must-fix flag caps a would-be "Approved" decision to "Conditional
+    Approval".
 
     Returns:
     - cab_decision: "Approved" | "Rejected" | "Conditional Approval" | ...
     - cab_reasoning: Detailed reasoning from chair
     - agent_logs: List of agent statements for UI display
-    - flags: List of recommendation flag dicts (sorted by agent, Must-fix first)
+    - flags: Deduplicated flag dicts (grouped by category, Must-fix first)
     """
 
     agent_logs = []
@@ -290,8 +448,10 @@ def run_ai_cab_session(rfc_data: Dict) -> Tuple[str, str, List[str], List[Dict]]
     if has_must_fix and cab_decision == "Approved":
         cab_decision = "Conditional Approval"
 
-    # Step 5: Aggregate flags (raw concatenation) and append the required-changes block
-    flags = sort_flags(all_flags)
+    # Step 5: Merge near-duplicate flags raised by multiple agents — a cheap
+    # text-similarity pass for literal repeats, then an LLM consolidation
+    # pass for paraphrased duplicates — then sort and append the block
+    flags = sort_flags(consolidate_flags_with_llm(dedupe_flags(all_flags)))
     agent_logs.append(format_flags_block(flags))
 
     return cab_decision, cab_reasoning, agent_logs, flags

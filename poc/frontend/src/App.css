@@ -1076,15 +1076,6 @@ body {
   background: #6c9bd1;
 }
 
-.flag-category {
-  font-size: 0.8em;
-  font-weight: 600;
-  color: #555;
-  background: #eef0f6;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
 .flag-element {
   font-size: 0.85em;
   color: #777;
@@ -1094,6 +1085,12 @@ body {
 .flag-rec {
   color: #333;
   line-height: 1.5;
+  margin: 0 0 6px;
+}
+
+.flag-raised-by {
+  font-size: 0.78em;
+  color: #999;
   margin: 0;
 }
 

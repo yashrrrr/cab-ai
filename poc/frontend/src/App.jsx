@@ -3,7 +3,7 @@ import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://localhost:8001';
 
 const STATUS_ICONS = {
   'Submitted': '⏳',
@@ -102,8 +102,13 @@ function SkeletonCard() {
   );
 }
 
-// Display order for flag groups (raw concatenation, grouped by agent)
-const AGENT_ORDER = ['Infrastructure', 'Application', 'Business', 'Security', 'Chair'];
+// Display order for flag groups. Flags raised by multiple agents for the
+// same underlying concern are merged server-side, so grouping is by
+// category (not by agent) with a "raised by" tag listing every contributor.
+const CATEGORY_ORDER = [
+  'Access/Permissions', 'Testing', 'Rollback/Recovery',
+  'Communication/SLA', 'Compliance/Security', 'Infrastructure', 'Other',
+];
 const SEV_ORDER = { 'Must-fix': 0, 'Should-fix': 1, 'Nice-to-have': 2 };
 
 function FlagsPanel({ flags }) {
@@ -114,17 +119,17 @@ function FlagsPanel({ flags }) {
       {list.length === 0 ? (
         <p className="flags-empty">No required changes flagged.</p>
       ) : (
-        AGENT_ORDER.map((agent) => {
+        CATEGORY_ORDER.map((category) => {
           const group = list
-            .filter((f) => f.raised_by === agent)
+            .filter((f) => f.category === category)
             .sort(
               (a, b) =>
                 (SEV_ORDER[a.severity] ?? 3) - (SEV_ORDER[b.severity] ?? 3)
             );
           if (group.length === 0) return null;
           return (
-            <div key={agent} className="flag-group">
-              <h4>{agent}</h4>
+            <div key={category} className="flag-group">
+              <h4>{category}</h4>
               {group.map((f, i) => (
                 <div key={i} className="flag-item">
                   <div className="flag-head">
@@ -136,10 +141,12 @@ function FlagsPanel({ flags }) {
                     >
                       {f.severity}
                     </span>
-                    <span className="flag-category">{f.category}</span>
                     <span className="flag-element">{f.affected_element}</span>
                   </div>
                   <p className="flag-rec">{f.recommendation}</p>
+                  {f.raised_by && (
+                    <p className="flag-raised-by">Raised by: {f.raised_by}</p>
+                  )}
                 </div>
               ))}
             </div>
