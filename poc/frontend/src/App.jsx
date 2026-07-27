@@ -250,6 +250,7 @@ function DecisionBadge({ decision }) {
 }
 
 const THEME_STORAGE_KEY = 'ust-theme';
+const SIDEBAR_STORAGE_KEY = 'ust-sidebar-collapsed';
 
 function getInitialTheme() {
   const saved = localStorage.getItem(THEME_STORAGE_KEY);
@@ -259,8 +260,98 @@ function getInitialTheme() {
     : 'light';
 }
 
+function getInitialSidebarCollapsed() {
+  return localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true';
+}
+
+// Placeholder — static content only, no data wiring yet.
+function DashboardPage() {
+  const placeholders = [
+    { label: 'Total Requests', value: '—' },
+    { label: 'Approved This Month', value: '—' },
+    { label: 'Avg. Turnaround', value: '—' },
+    { label: 'Open Items', value: '—' },
+  ];
+  return (
+    <div className="content fade-in">
+      <h2>Dashboard</h2>
+      <p className="form-subtitle">Placeholder page — real metrics coming soon.</p>
+      <div className="stats-row">
+        {placeholders.map((p) => (
+          <StatCard key={p.label} label={p.label} value={p.value} tone="neutral" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Placeholder — UI shell only, submission isn't wired up yet.
+function RfcRequestPage() {
+  return (
+    <div className="content fade-in">
+      <div className="submit-form">
+        <h2>RFC request</h2>
+        <p className="form-subtitle">
+          Placeholder page — fields are for layout only; submission isn't wired up yet.
+        </p>
+        <form onSubmit={(e) => e.preventDefault()}>
+          <div className="form-group">
+            <label>Title</label>
+            <input type="text" placeholder="e.g., Deploy new payment service" />
+          </div>
+          <div className="form-group">
+            <label>Description</label>
+            <textarea placeholder="Describe the requested change..." rows="4" />
+          </div>
+          <div className="form-group">
+            <label>Priority</label>
+            <select defaultValue="Moderate">
+              <option>Low</option>
+              <option>Moderate</option>
+              <option>High</option>
+              <option>Critical</option>
+            </select>
+          </div>
+          <button type="submit" className="btn-primary">
+            Submit
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage({ theme, onToggleTheme }) {
+  return (
+    <div className="content fade-in">
+      <div className="settings-panel">
+        <h2>Settings</h2>
+        <p className="form-subtitle">Appearance</p>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">Dark mode</div>
+            <div className="settings-row-desc">
+              Switch between light and dark themes. Your choice is remembered on this device.
+            </div>
+          </div>
+          <button
+            className={`theme-switch ${theme === 'dark' ? 'is-dark' : ''}`}
+            onClick={onToggleTheme}
+            role="switch"
+            aria-checked={theme === 'dark'}
+            aria-label="Toggle dark mode"
+          >
+            <span className="theme-switch-thumb" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [theme, setTheme] = useState(getInitialTheme);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(getInitialSidebarCollapsed);
   const [activeTab, setActiveTab] = useState('list');
   const [rfcs, setRfcs] = useState([]);
   const [listLoading, setListLoading] = useState(true);
@@ -307,6 +398,10 @@ function App() {
   }, [theme]);
 
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     return () => clearInterval(revealTimer.current);
@@ -639,21 +734,64 @@ function App() {
         </div>
       </header>
 
-      <nav className="tabs">
-        <button
-          className={`tab-btn ${activeTab === 'list' ? 'active' : ''}`}
-          onClick={() => setActiveTab('list')}
-        >
-          RFC Register
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'submit' ? 'active' : ''}`}
-          onClick={() => setActiveTab('submit')}
-        >
-          Submit Change Request
-        </button>
-      </nav>
+      <div className="app-body">
+        <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+          <div className="sidebar-header">
+            <button
+              className="sidebar-toggle-btn"
+              onClick={() => setSidebarCollapsed((c) => !c)}
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {sidebarCollapsed ? '»' : '«'}
+            </button>
+          </div>
+          <nav className="sidebar-nav">
+            <button
+              className={`sidebar-nav-item ${activeTab === 'list' ? 'active' : ''}`}
+              onClick={() => setActiveTab('list')}
+              title="RFC Register"
+            >
+              <span className="sidebar-nav-icon">📋</span>
+              <span className="sidebar-nav-label">RFC Register</span>
+            </button>
+            <button
+              className={`sidebar-nav-item ${activeTab === 'submit' ? 'active' : ''}`}
+              onClick={() => setActiveTab('submit')}
+              title="Submit Change Request"
+            >
+              <span className="sidebar-nav-icon">➕</span>
+              <span className="sidebar-nav-label">Submit Change Request</span>
+            </button>
+            <button
+              className={`sidebar-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
+              onClick={() => setActiveTab('dashboard')}
+              title="Dashboard"
+            >
+              <span className="sidebar-nav-icon">📊</span>
+              <span className="sidebar-nav-label">Dashboard</span>
+            </button>
+            <button
+              className={`sidebar-nav-item ${activeTab === 'rfcRequest' ? 'active' : ''}`}
+              onClick={() => setActiveTab('rfcRequest')}
+              title="RFC Request"
+            >
+              <span className="sidebar-nav-icon">📝</span>
+              <span className="sidebar-nav-label">RFC Request</span>
+            </button>
+            <div className="sidebar-divider" />
+            <button
+              className={`sidebar-nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+              onClick={() => setActiveTab('settings')}
+              title="Settings"
+            >
+              <span className="sidebar-nav-icon">⚙️</span>
+              <span className="sidebar-nav-label">Settings</span>
+            </button>
+          </nav>
+        </aside>
 
+        <div className="main-column">
       {activeTab === 'list' && (
         <div className="content fade-in">
           <div className="stats-row">
@@ -1167,11 +1305,19 @@ function App() {
         </div>
       )}
 
+      {activeTab === 'dashboard' && <DashboardPage />}
+
+      {activeTab === 'rfcRequest' && <RfcRequestPage />}
+
+      {activeTab === 'settings' && <SettingsPage theme={theme} onToggleTheme={toggleTheme} />}
+
       <footer className="app-footer">
         RFC Lifecycle Platform &middot; Every classification traces to the ITIL v6.1 Change
         Management process &middot; AI recommendations are advisory — humans retain final
         approval authority.
       </footer>
+        </div>
+      </div>
     </div>
   );
 }
