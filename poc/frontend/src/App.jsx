@@ -106,6 +106,22 @@ function SkeletonCard() {
 const AGENT_ORDER = ['Infrastructure', 'Application', 'Business', 'Security', 'Chair'];
 const SEV_ORDER = { 'Must-fix': 0, 'Should-fix': 1, 'Nice-to-have': 2 };
 
+// Agents append a machine-readable "FLAGS: [...]" block to their prose. Those
+// flags are already shown by <FlagsPanel>, so strip the raw block from any text
+// rendered to the user (handles legacy records that stored the block inline).
+function stripFlags(text) {
+  if (typeof text !== 'string') return text;
+  const idx = text.lastIndexOf('FLAGS:');
+  return idx === -1 ? text : text.slice(0, idx).trimEnd();
+}
+
+// A CAB deliberation log entry that is the required-changes summary. The styled
+// <FlagsPanel> already renders those, so this entry is filtered out of the log
+// stream to avoid showing "Required Changes & Recommendations" twice.
+function isFlagsBlock(log) {
+  return typeof log === 'string' && log.includes('REQUIRED CHANGES & RECOMMENDATIONS');
+}
+
 function FlagsPanel({ flags }) {
   const list = Array.isArray(flags) ? flags : [];
   return (
@@ -258,7 +274,7 @@ function App() {
       setCabSession(response.data);
       setVisibleLogCount(0);
 
-      const total = response.data.agent_logs.length;
+      const total = (response.data.agent_logs || []).filter((l) => !isFlagsBlock(l)).length;
       let count = 0;
       clearInterval(revealTimer.current);
       revealTimer.current = setInterval(() => {
@@ -332,6 +348,9 @@ function App() {
     });
   }, [rfcs, searchQuery, filterType, filterStatus]);
 
+  // Deliberation log entries minus the required-changes summary (shown via FlagsPanel)
+  const visibleAgentLogs = (cabSession?.agent_logs || []).filter((l) => !isFlagsBlock(l));
+
   return (
     <div className="app">
       <Toast toast={toast} onClose={() => setToast(null)} />
@@ -383,10 +402,6 @@ function App() {
                 )}
               </div>
             )}
-          </div>
-          <div className="system-status">
-            <span className="status-dot" />
-            System Operational
           </div>
         </div>
       </header>
@@ -721,12 +736,12 @@ function App() {
               <div className="cab-session">
                 <h3>CAB Deliberation Session</h3>
                 <div className="agent-logs">
-                  {cabSession.agent_logs.slice(0, visibleLogCount).map((log, idx) => (
+                  {visibleAgentLogs.slice(0, visibleLogCount).map((log, idx) => (
                     <div key={idx} className="agent-log-entry log-reveal">
-                      <ReactMarkdown>{log}</ReactMarkdown>
+                      <ReactMarkdown>{stripFlags(log)}</ReactMarkdown>
                     </div>
                   ))}
-                  {visibleLogCount < cabSession.agent_logs.length && (
+                  {visibleLogCount < visibleAgentLogs.length && (
                     <div className="agent-log-entry log-typing">
                       <span className="typing-dot" />
                       <span className="typing-dot" />
@@ -735,12 +750,12 @@ function App() {
                   )}
                 </div>
 
-                {visibleLogCount >= cabSession.agent_logs.length && (
+                {visibleLogCount >= visibleAgentLogs.length && (
                   <>
                     <div className="cab-decision-box fade-in">
                       <h4>Final Decision: {cabSession.cab_decision}</h4>
                       <div className="decision-reasoning">
-                        <ReactMarkdown>{cabSession.cab_reasoning}</ReactMarkdown>
+                        <ReactMarkdown>{stripFlags(cabSession.cab_reasoning)}</ReactMarkdown>
                       </div>
                     </div>
 
@@ -756,7 +771,7 @@ function App() {
                 <div className="cab-decision-box">
                   <h4>Final Decision: {selectedRfc.cab_decision}</h4>
                   <div className="decision-reasoning">
-                    <ReactMarkdown>{selectedRfc.cab_reasoning}</ReactMarkdown>
+                    <ReactMarkdown>{stripFlags(selectedRfc.cab_reasoning)}</ReactMarkdown>
                   </div>
                 </div>
 

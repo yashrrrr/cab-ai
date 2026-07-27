@@ -4,7 +4,24 @@
       "Bash(docker-compose --version)",
       "Bash(python db_init.py)",
       "Bash(python3 \"C:/Users/soniy/Desktop/arch-bmad/_bmad/scripts/resolve_customization.py\" --skill \"C:/Users/soniy/Desktop/arch-bmad/.claude/skills/bmad-agent-analyst\" --key agent)",
-      "Bash(python \"C:/Users/soniy/Desktop/arch-bmad/_bmad/scripts/resolve_customization.py\" --skill \"C:/Users/soniy/Desktop/arch-bmad/.claude/skills/bmad-quick-dev\" --key workflow)"
+      "Bash(python \"C:/Users/soniy/Desktop/arch-bmad/_bmad/scripts/resolve_customization.py\" --skill \"C:/Users/soniy/Desktop/arch-bmad/.claude/skills/bmad-quick-dev\" --key workflow)",
+      "Bash(git --no-pager grep -c \"cab_flags\\\\|migrate_db\" HEAD -- poc/backend/main.py)",
+      "Bash(git --no-pager diff HEAD -- poc/backend/main.py)",
+      "Bash(git commit -o poc/backend/main.py _bmad-output/implementation-artifacts/deferred-work.md -m ' *)",
+      "Bash(git commit *)",
+      "Bash(git --no-pager log --oneline -4)",
+      "Bash(git add *)",
+      "Bash(git stash *)",
+      "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --env-filter ' *)",
+      "Bash(git --no-pager log -4 --format='%h | A: %an <%ae> | %s')",
+      "Bash(git --no-pager log --oneline origin/main -2)",
+      "Bash(python -c ' *)",
+      "Bash(python reset_cab.py --list)",
+      "Bash(python reset_cab.py CHG-DOES-NOT-EXIST)",
+      "Bash(python -c \"import sqlite3; c=sqlite3.connect\\('rfc_poc.db'\\); c.execute\\(\\\\\"UPDATE change_requests SET status='CAB Reviewed', cab_decision='Approved' WHERE rfc_number='CHG20260724002'\\\\\"\\); c.commit\\(\\); c.close\\(\\); print\\('seeded CHG20260724002 as reviewed'\\)\")",
+      "Bash(python reset_cab.py CHG20260724002)",
+      "Bash(npx react-scripts *)",
+      "Bash(node -e ' *)"
     ]
   }
 }

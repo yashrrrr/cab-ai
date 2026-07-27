@@ -206,27 +206,6 @@ def sort_flags(flags):
     return ordered
 
 
-def format_flags_block(flags) -> str:
-    """Render the Required Changes block for the deliberation log, grouped by agent."""
-    header = "\n🚩 REQUIRED CHANGES & RECOMMENDATIONS"
-    if not flags:
-        return header + "\n\n_No required changes flagged._"
-
-    lines = [header]
-    for label in RAISED_BY_ORDER:
-        group = [f for f in flags if f["raised_by"] == label]
-        if not group:
-            continue
-        group.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 3))
-        lines.append(f"\n**{label}**")
-        for f in group:
-            lines.append(
-                f"- `{f['severity']}` · {f['category']} — "
-                f"{f['affected_element']}: {f['recommendation']}"
-            )
-    return "\n".join(lines)
-
-
 # ─────────────────────────────────────────────────────────────
 # CAB Session Orchestrator
 # ─────────────────────────────────────────────────────────────
@@ -290,9 +269,10 @@ def run_ai_cab_session(rfc_data: Dict) -> Tuple[str, str, List[str], List[Dict]]
     if has_must_fix and cab_decision == "Approved":
         cab_decision = "Conditional Approval"
 
-    # Step 5: Aggregate flags (raw concatenation) and append the required-changes block
+    # Step 5: Aggregate flags (raw concatenation). The UI renders these in a
+    # dedicated "Required Changes & Recommendations" panel, so we intentionally
+    # do NOT duplicate them into agent_logs.
     flags = sort_flags(all_flags)
-    agent_logs.append(format_flags_block(flags))
 
     return cab_decision, cab_reasoning, agent_logs, flags
 
