@@ -290,6 +290,11 @@ function App() {
     requestor_name: '',
   });
 
+  // Supporting document (PDF) uploaded ahead of submission, paired with the
+  // RFC once created. null until a file is successfully uploaded/parsed.
+  const [uploadedDoc, setUploadedDoc] = useState(null); // { token, filename }
+  const [docParsing, setDocParsing] = useState(false);
+
   useEffect(() => {
     fetchRfcList();
     // fetchRfcList is stable for our purposes; run once on mount.
@@ -326,6 +331,48 @@ function App() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
+  const handleDocumentUpload = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = ''; // allow re-selecting the same file later (e.g. after Remove)
+    if (!file) return;
+
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      showToast('Only PDF documents are supported.', 'error');
+      return;
+    }
+
+    setDocParsing(true);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const response = await axios.post(`${API_BASE}/rfc/upload-document`, body, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const { document_token, filename, extracted_fields } = response.data;
+      setUploadedDoc({ token: document_token, filename });
+
+      const hasFields = extracted_fields && Object.keys(extracted_fields).length > 0;
+      if (hasFields) {
+        setFormData((prev) => ({
+          ...prev,
+          ...extracted_fields,
+          ...(extracted_fields.affected_systems && {
+            affected_systems: extracted_fields.affected_systems.join(', '),
+          }),
+        }));
+        showToast(`Parsed ${filename} — review the pre-filled fields below.`, 'success');
+      } else {
+        showToast(`${filename} attached — couldn't auto-detect fields, please fill in manually.`, 'success');
+      }
+    } catch (error) {
+      showToast(error.response?.data?.detail || 'Failed to parse document.', 'error');
+    } finally {
+      setDocParsing(false);
+    }
+  };
+
+  const handleRemoveDocument = () => setUploadedDoc(null);
+
   const handleSubmitRfc = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -338,6 +385,8 @@ function App() {
           .map((s) => s.trim())
           .filter(Boolean),
         estimated_downtime_hours: parseFloat(formData.estimated_downtime_hours),
+        document_token: uploadedDoc?.token || null,
+        document_filename: uploadedDoc?.filename || null,
       };
 
       const response = await axios.post(`${API_BASE}/rfc/submit`, payload);
@@ -353,6 +402,7 @@ function App() {
         estimated_downtime_hours: 0,
         requestor_name: '',
       });
+      setUploadedDoc(null);
       setActiveTab('list');
       fetchRfcList();
     } catch (error) {
@@ -709,6 +759,35 @@ function App() {
             </p>
             <form onSubmit={handleSubmitRfc}>
               <div className="form-group">
+                <label>Supporting Document (PDF, optional)</label>
+                <p className="form-subtitle">
+                  Upload a PRD, BRD, or RFC document — it will be used to pre-fill the fields below (review before submitting), and shared with the CAB agents during review.
+                </p>
+                {!uploadedDoc ? (
+                  <>
+                    <input
+                      type="file"
+                      accept="application/pdf"
+                      onChange={handleDocumentUpload}
+                      disabled={docParsing}
+                    />
+                    {docParsing && (
+                      <span className="btn-spinner-wrap">
+                        <span className="btn-spinner" /> Parsing document &amp; pre-filling fields...
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <div className="badge status-generic doc-attached">
+                    📎 {uploadedDoc.filename}
+                    <button type="button" className="doc-remove-btn" onClick={handleRemoveDocument}>
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="form-group">
                 <label>RFC Title *</label>
                 <input
                   type="text"
@@ -883,6 +962,12 @@ function App() {
                     />
                   </div>
                   <span>{selectedRfc.risk_level} / 5</span>
+                </div>
+              )}
+              {selectedRfc.document_filename && (
+                <div className="meta-item">
+                  <strong>Supporting Document</strong>
+                  <span className="badge status-generic">📎 {selectedRfc.document_filename}</span>
                 </div>
               )}
             </div>

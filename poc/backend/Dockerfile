@@ -7,7 +7,9 @@ RUN pip install --no-cache-dir \
     uvicorn==0.24.0 \
     anthropic==0.7.1 \
     pydantic==2.5.0 \
-    python-multipart==0.0.6
+    python-multipart==0.0.6 \
+    openai==1.54.0 \
+    pypdf==4.0.1
 
 COPY . .
 

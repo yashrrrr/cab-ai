@@ -3,7 +3,7 @@ RFC Lifecycle PoC Backend — FastAPI + AI CAB Orchestration
 Demonstrates deterministic classification + multi-agent CAB deliberation
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -13,10 +13,18 @@ import json
 import uuid
 import sqlite3
 import os
+import shutil
 
 from cab_orchestrator import run_ai_cab_session
 from classification import classify_rfc, evaluate_no_impact, match_scc
 from db_init import init_db, migrate_db, get_db_connection
+from document_extraction import extract_pdf_text, extract_rfc_fields
+
+# Supporting-document uploads: PDFs land in uploads/tmp/{token}.pdf until the
+# RFC they're paired with is created, then move to uploads/{rfc_id}/.
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+UPLOAD_TMP_DIR = os.path.join(UPLOAD_DIR, "tmp")
+os.makedirs(UPLOAD_TMP_DIR, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────
 # FastAPI App Setup
@@ -70,6 +78,8 @@ class RFCSubmissionRequest(BaseModel):
     affected_systems: List[str]  # ["ServiceA", "ServiceB"]
     estimated_downtime_hours: Optional[float] = 0
     requestor_name: str
+    document_token: Optional[str] = None  # from POST /rfc/upload-document, pairs the uploaded PDF with this RFC
+    document_filename: Optional[str] = None  # original filename, echoed back from the upload response
 
 class RFCResponse(BaseModel):
     id: str
@@ -93,6 +103,7 @@ class RFCResponse(BaseModel):
     test_cases: Optional[str] = None
     back_out_plan: Optional[str] = None
     cab_flags: Optional[List[dict]] = None
+    document_filename: Optional[str] = None
 
 class CABSessionRequest(BaseModel):
     rfc_id: str
@@ -118,6 +129,38 @@ async def startup():
 async def health():
     """Health check"""
     return {"status": "ok"}
+
+@app.post("/rfc/upload-document")
+async def upload_document(file: UploadFile = File(...)):
+    """
+    Upload a supporting document (PDF only) ahead of RFC submission.
+    Extracts text and asks the LLM to suggest values for the submission
+    form fields. Returns a document_token to pass back on /rfc/submit so
+    the file gets paired with the created RFC.
+    """
+    filename = file.filename or "document.pdf"
+    if file.content_type != "application/pdf" and not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=415, detail="Only PDF documents are supported.")
+
+    document_token = str(uuid.uuid4())
+    tmp_path = os.path.join(UPLOAD_TMP_DIR, f"{document_token}.pdf")
+
+    with open(tmp_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    try:
+        document_text = extract_pdf_text(tmp_path)
+    except Exception:
+        os.remove(tmp_path)
+        raise HTTPException(status_code=400, detail="Could not read this PDF — it may be corrupt or unsupported.")
+
+    extracted_fields = extract_rfc_fields(document_text)
+
+    return {
+        "document_token": document_token,
+        "filename": filename,
+        "extracted_fields": extracted_fields,
+    }
 
 @app.post("/rfc/submit", response_model=RFCResponse)
 async def submit_rfc(req: RFCSubmissionRequest):
@@ -167,6 +210,31 @@ async def submit_rfc(req: RFCSubmissionRequest):
             status = "Escalated to CAB (Ambiguous No Impact)"
             req.change_type = ChangeTypeEnum.NORMAL
 
+    # Pair an uploaded supporting document (if any) with this RFC — moves the
+    # temp PDF from uploads/tmp/ into a per-RFC folder and re-extracts text
+    # (cheap, and avoids trusting a client-supplied cache of the text).
+    document_filename = None
+    document_path = None
+    document_text = None
+    if req.document_token:
+        tmp_path = os.path.join(UPLOAD_TMP_DIR, f"{req.document_token}.pdf")
+        if os.path.exists(tmp_path):
+            safe_name = os.path.basename(req.document_filename or "document.pdf") or "document.pdf"
+            if not safe_name.lower().endswith(".pdf"):
+                safe_name += ".pdf"
+            rfc_upload_dir = os.path.join(UPLOAD_DIR, rfc_id)
+            os.makedirs(rfc_upload_dir, exist_ok=True)
+            final_path = os.path.join(rfc_upload_dir, safe_name)
+            shutil.move(tmp_path, final_path)
+            document_filename = safe_name
+            document_path = final_path
+            try:
+                document_text = extract_pdf_text(final_path)
+            except Exception:
+                document_text = None
+        # A missing/expired temp file (e.g. stale token) is not an error —
+        # the RFC is simply submitted without a paired document.
+
     # Persist to DB
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -175,15 +243,17 @@ async def submit_rfc(req: RFCSubmissionRequest):
             id, rfc_number, title, description, change_type, impact, priority,
             risk_level, status, auto_approved, created_at, requestor_name,
             affected_systems, implementation_plan, test_cases, back_out_plan,
-            business_justification, estimated_downtime_hours
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            business_justification, estimated_downtime_hours,
+            document_filename, document_path, document_text
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         rfc_id, rfc_number, req.title, req.description, req.change_type.value,
         impact.value, priority.value, risk_level, status, auto_approved,
         datetime.now().isoformat(), req.requestor_name,
         json.dumps(req.affected_systems), req.implementation_plan,
         req.test_cases, req.back_out_plan, req.business_justification,
-        req.estimated_downtime_hours
+        req.estimated_downtime_hours,
+        document_filename, document_path, document_text
     ))
     conn.commit()
 
@@ -208,7 +278,8 @@ async def submit_rfc(req: RFCSubmissionRequest):
         business_justification=req.business_justification,
         implementation_plan=req.implementation_plan,
         test_cases=req.test_cases,
-        back_out_plan=req.back_out_plan
+        back_out_plan=req.back_out_plan,
+        document_filename=document_filename
     )
 
 @app.get("/rfc/{rfc_id}", response_model=RFCResponse)
@@ -261,7 +332,8 @@ async def get_rfc(rfc_id: str):
         back_out_plan=row[17],
         business_justification=row[18],
         estimated_downtime_hours=row[19],
-        cab_flags=cab_flags
+        cab_flags=cab_flags,
+        document_filename=row["document_filename"]
     )
 
 @app.post("/rfc/{rfc_id}/trigger-cab")
@@ -302,6 +374,7 @@ async def trigger_cab_review(rfc_id: str):
         "implementation_plan": row[15],
         "test_cases": row[16],
         "back_out_plan": row[17],
+        "document_text": row["document_text"],
     }
 
     # Run AI CAB session

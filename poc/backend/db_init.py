@@ -34,7 +34,10 @@ def init_db(db_path: str = "rfc_poc.db"):
             back_out_plan TEXT,
             business_justification TEXT,
             estimated_downtime_hours REAL,
-            cab_flags TEXT
+            cab_flags TEXT,
+            document_filename TEXT,
+            document_path TEXT,
+            document_text TEXT
         )
     """)
 
@@ -98,6 +101,16 @@ def migrate_db(db_path: str = "rfc_poc.db"):
             except sqlite3.OperationalError:
                 # Another process added it concurrently ("duplicate column name") — safe to ignore
                 pass
+
+        # Add supporting-document columns if they do not exist yet
+        for column in ("document_filename", "document_path", "document_text"):
+            if column not in existing_columns:
+                try:
+                    cursor.execute(f"ALTER TABLE change_requests ADD COLUMN {column} TEXT")
+                    print(f"[OK] Migration: added {column} column")
+                except sqlite3.OperationalError:
+                    # Another process added it concurrently ("duplicate column name") — safe to ignore
+                    pass
 
         conn.commit()
     finally:

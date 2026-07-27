@@ -440,9 +440,15 @@ def run_ai_cab_session(rfc_data: Dict) -> Tuple[str, str, List[str], List[Dict]]
 # Helper: Format RFC Summary
 # ─────────────────────────────────────────────────────────────
 
+# Max characters of the paired supporting document included in the CAB
+# prompt (all 5 agents see the same summary) — keeps token budget in check
+# for long PRDs/BRDs while still giving agents the source material.
+MAX_DOCUMENT_CHARS_IN_SUMMARY = 6000
+
+
 def format_rfc_summary(rfc_data: Dict) -> str:
     """Format RFC into a clear summary for agents"""
-    return f"""
+    summary = f"""
 RFC NUMBER: {rfc_data['rfc_number']}
 TITLE: {rfc_data['title']}
 TYPE: {rfc_data['change_type']}
@@ -468,6 +474,15 @@ BACK-OUT PLAN:
 BUSINESS JUSTIFICATION:
 {rfc_data.get('business_justification', 'Not provided')}
 """
+
+    document_text = rfc_data.get("document_text")
+    if document_text:
+        summary += f"""
+SUPPORTING DOCUMENT (uploaded PRD/BRD/RFC — full extracted text, use as primary source for details not captured above):
+{document_text[:MAX_DOCUMENT_CHARS_IN_SUMMARY]}
+"""
+
+    return summary
 
 # ─────────────────────────────────────────────────────────────
 # Helper: Get Specialist Opinion (OpenAI API call)

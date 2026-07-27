@@ -21,7 +21,10 @@
       "Bash(python -c \"import sqlite3; c=sqlite3.connect\\('rfc_poc.db'\\); c.execute\\(\\\\\"UPDATE change_requests SET status='CAB Reviewed', cab_decision='Approved' WHERE rfc_number='CHG20260724002'\\\\\"\\); c.commit\\(\\); c.close\\(\\); print\\('seeded CHG20260724002 as reviewed'\\)\")",
       "Bash(python reset_cab.py CHG20260724002)",
       "Bash(npx react-scripts *)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(npm install *)",
+      "Bash(python3 _bmad/scripts/resolve_customization.py --skill .claude/skills/bmad-agent-analyst --key agent)",
+      "Bash(uv run *)"
     ]
   }
 }

@@ -682,6 +682,23 @@ body {
   border: 1px solid var(--border-color);
 }
 
+.badge.doc-attached {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.doc-remove-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.95em;
+  font-weight: 700;
+  color: var(--status-danger-text, #d33);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .rfc-date {
   color: var(--text-muted);
   font-size: 0.82em;
