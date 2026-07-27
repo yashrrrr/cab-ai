@@ -362,27 +362,6 @@ def sort_flags(flags):
     return sorted(flags, key=_key)
 
 
-def format_flags_block(flags) -> str:
-    """Render the Required Changes block for the deliberation log, grouped by category."""
-    header = "\n🚩 REQUIRED CHANGES & RECOMMENDATIONS"
-    if not flags:
-        return header + "\n\n_No required changes flagged._"
-
-    lines = [header]
-    for category in CATEGORY_ORDER:
-        group = [f for f in flags if f["category"] == category]
-        if not group:
-            continue
-        group.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 3))
-        lines.append(f"\n**{category}**")
-        for f in group:
-            lines.append(
-                f"- `{f['severity']}` · {f['affected_element']}: "
-                f"{f['recommendation']} _(raised by {f['raised_by']})_"
-            )
-    return "\n".join(lines)
-
-
 # ─────────────────────────────────────────────────────────────
 # CAB Session Orchestrator
 # ─────────────────────────────────────────────────────────────
@@ -450,9 +429,10 @@ def run_ai_cab_session(rfc_data: Dict) -> Tuple[str, str, List[str], List[Dict]]
 
     # Step 5: Merge near-duplicate flags raised by multiple agents — a cheap
     # text-similarity pass for literal repeats, then an LLM consolidation
-    # pass for paraphrased duplicates — then sort and append the block
+    # pass for paraphrased duplicates. The UI renders these in a dedicated
+    # "Required Changes & Recommendations" panel, so we intentionally do
+    # NOT duplicate them into agent_logs.
     flags = sort_flags(consolidate_flags_with_llm(dedupe_flags(all_flags)))
-    agent_logs.append(format_flags_block(flags))
 
     return cab_decision, cab_reasoning, agent_logs, flags
 
