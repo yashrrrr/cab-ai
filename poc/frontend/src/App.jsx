@@ -268,6 +268,8 @@ function App() {
 
   useEffect(() => {
     fetchRfcList();
+    // fetchRfcList is stable for our purposes; run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -358,7 +360,10 @@ function App() {
         if (count >= total) clearInterval(revealTimer.current);
       }, 550);
     } catch (error) {
-      showToast(`CAB session failed: ${error.message}`, 'error');
+      // Surface the backend's real reason (e.g. LLM rate limit / quota) instead
+      // of the opaque "Request failed with status code 500".
+      const detail = error.response?.data?.detail || error.message;
+      showToast(`CAB session failed: ${detail}`, 'error');
     } finally {
       setLoading(false);
     }
