@@ -726,6 +726,47 @@ body {
   background: var(--slate-200);
 }
 
+.detail-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.btn-download-pdf {
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 0.88em;
+  font-weight: 600;
+  cursor: pointer;
+  background: white;
+  color: var(--blue-600);
+  border: 1px solid var(--blue-500);
+  transition: all 0.2s ease;
+}
+
+.btn-download-pdf:hover:not(:disabled) {
+  background: var(--blue-600);
+  color: white;
+}
+
+.btn-download-pdf:disabled {
+  color: var(--slate-400);
+  border-color: var(--slate-200);
+  cursor: not-allowed;
+}
+
+.btn-spinner-dark {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(37, 99, 235, 0.3);
+  border-top-color: var(--blue-600);
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+}
+
 /* ─────────────────────────────────────────────────────────────
    RFC Detail View
    ───────────────────────────────────────────────────────────── */
@@ -826,9 +867,68 @@ body {
 
 .cab-tabs {
   display: flex;
-  gap: 6px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 18px;
   flex-wrap: wrap;
+}
+
+.cab-tabs-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cab-download-all-btn {
+  padding: 9px 16px;
+  border-radius: 999px;
+  font-size: 0.85em;
+  font-weight: 700;
+  cursor: pointer;
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  transition: all 0.2s ease;
+}
+
+.cab-download-all-btn:hover:not(:disabled) {
+  background: var(--blue-600);
+  color: white;
+}
+
+.cab-download-all-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cab-panel-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.btn-download-pdf-sm {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.78em;
+  font-weight: 700;
+  cursor: pointer;
+  background: white;
+  color: var(--blue-600);
+  border: 1px solid var(--blue-500);
+  transition: all 0.2s ease;
+}
+
+.btn-download-pdf-sm:hover:not(:disabled) {
+  background: var(--blue-600);
+  color: white;
+}
+
+.btn-download-pdf-sm:disabled {
+  color: var(--slate-400);
+  border-color: var(--slate-200);
+  cursor: not-allowed;
 }
 
 .cab-tab-btn {

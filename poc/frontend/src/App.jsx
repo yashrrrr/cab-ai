@@ -2,6 +2,12 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
+import {
+  downloadCabTabPdf,
+  downloadCabAllPdf,
+  downloadFullRfcReportPdf,
+  downloadRegisterPdf,
+} from './pdfExport';
 
 const API_BASE = 'http://localhost:8001';
 
@@ -252,6 +258,8 @@ function App() {
   const [visibleLogCount, setVisibleLogCount] = useState(0);
   const [notifOpen, setNotifOpen] = useState(false);
   const [cabResultTab, setCabResultTab] = useState('deliberation');
+  // Which download is in flight: null | 'register' | 'deliberation' | 'decision' | 'flags' | 'cabAll' | 'fullReport'
+  const [pdfLoading, setPdfLoading] = useState(null);
   const revealTimer = useRef(null);
 
   const [formData, setFormData] = useState({
@@ -362,6 +370,70 @@ function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Runs a (synchronous, potentially slow) PDF build under a loading flag.
+  // The setTimeout lets React paint the spinner before the main thread
+  // blocks on jsPDF's work, so the loading state is actually visible.
+  const withPdfLoading = (key, buildFn) => {
+    setPdfLoading(key);
+    setTimeout(() => {
+      try {
+        buildFn();
+      } catch (error) {
+        showToast(`PDF generation failed: ${error.message}`, 'error');
+      } finally {
+        setPdfLoading(null);
+      }
+    }, 50);
+  };
+
+  // Live session data takes priority over the cached (previously reviewed)
+  // record, matching what's actually shown on screen right now.
+  const getCabData = () => ({
+    agentLogs: cabSession ? visibleAgentLogs : [],
+    decision: cabSession ? cabSession.cab_decision : selectedRfc.cab_decision,
+    reasoning: cabSession ? cabSession.cab_reasoning : selectedRfc.cab_reasoning,
+    flags: cabSession ? cabSession.cab_flags : selectedRfc.cab_flags,
+  });
+
+  const handleDownloadRegisterPdf = () => {
+    const exportRfcs = filteredRfcs.length > 0 ? filteredRfcs : rfcs;
+    withPdfLoading('register', () => {
+      downloadRegisterPdf(exportRfcs);
+      showToast('RFC Register PDF downloaded.', 'success');
+    });
+  };
+
+  const handleDownloadCabTab = (kind) => {
+    withPdfLoading(kind, () => {
+      downloadCabTabPdf(kind, selectedRfc, getCabData());
+      showToast('PDF downloaded.', 'success');
+    });
+  };
+
+  const handleDownloadCabAll = () => {
+    withPdfLoading('cabAll', () => {
+      const skipped = downloadCabAllPdf(selectedRfc, getCabData());
+      showToast(
+        skipped.length > 0
+          ? `PDF downloaded. Skipped (not yet available): ${skipped.join(', ')}.`
+          : 'Full CAB report PDF downloaded.',
+        skipped.length > 0 ? 'info' : 'success'
+      );
+    });
+  };
+
+  const handleDownloadFullReport = () => {
+    withPdfLoading('fullReport', () => {
+      const skipped = downloadFullRfcReportPdf(selectedRfc, getCabData());
+      showToast(
+        skipped.length > 0
+          ? `PDF downloaded. Skipped (no CAB review yet): ${skipped.join(', ')}.`
+          : 'Full RFC report PDF downloaded.',
+        skipped.length > 0 ? 'info' : 'success'
+      );
+    });
   };
 
   const stats = useMemo(() => {
@@ -535,6 +607,20 @@ function App() {
                     </option>
                   ))}
                 </select>
+                <button
+                  className="btn-download-pdf"
+                  onClick={handleDownloadRegisterPdf}
+                  disabled={listLoading || rfcs.length === 0 || pdfLoading === 'register'}
+                  title="Download the RFC register and analytics as a PDF"
+                >
+                  {pdfLoading === 'register' ? (
+                    <span className="btn-spinner-wrap">
+                      <span className="btn-spinner-dark" /> Generating...
+                    </span>
+                  ) : (
+                    '⬇ Download PDF'
+                  )}
+                </button>
               </div>
             </div>
 
@@ -710,9 +796,25 @@ function App() {
       {activeTab === 'detail' && selectedRfc && (
         <div className="content fade-in">
           <div className="rfc-detail">
-            <button className="btn-back" onClick={() => setActiveTab('list')}>
-              &larr; Back to Register
-            </button>
+            <div className="detail-toolbar">
+              <button className="btn-back" onClick={() => setActiveTab('list')}>
+                &larr; Back to Register
+              </button>
+              <button
+                className="btn-download-pdf"
+                onClick={handleDownloadFullReport}
+                disabled={pdfLoading === 'fullReport'}
+                title="Download this RFC's full details and CAB results as a PDF"
+              >
+                {pdfLoading === 'fullReport' ? (
+                  <span className="btn-spinner-wrap">
+                    <span className="btn-spinner-dark" /> Generating...
+                  </span>
+                ) : (
+                  '📄 Download Full Report (PDF)'
+                )}
+              </button>
+            </div>
 
             <h2>{selectedRfc.title}</h2>
             <div className="detail-meta">
@@ -816,76 +918,123 @@ function App() {
               return (
                 <div className="cab-session">
                   <div className="cab-tabs">
-                    {cabSession && (
+                    <div className="cab-tabs-group">
+                      {cabSession && (
+                        <button
+                          className={`cab-tab-btn ${cabResultTab === 'deliberation' ? 'active' : ''}`}
+                          onClick={() => setCabResultTab('deliberation')}
+                        >
+                          💬 Deliberation
+                        </button>
+                      )}
                       <button
-                        className={`cab-tab-btn ${cabResultTab === 'deliberation' ? 'active' : ''}`}
-                        onClick={() => setCabResultTab('deliberation')}
+                        className={`cab-tab-btn ${cabResultTab === 'decision' ? 'active' : ''}`}
+                        onClick={() => setCabResultTab('decision')}
                       >
-                        💬 Deliberation
+                        ⚖️ Decision
                       </button>
-                    )}
+                      <button
+                        className={`cab-tab-btn ${cabResultTab === 'flags' ? 'active' : ''}`}
+                        onClick={() => setCabResultTab('flags')}
+                      >
+                        🚩 Required Changes
+                        {flagCount > 0 && <span className="cab-tab-count">{flagCount}</span>}
+                      </button>
+                    </div>
                     <button
-                      className={`cab-tab-btn ${cabResultTab === 'decision' ? 'active' : ''}`}
-                      onClick={() => setCabResultTab('decision')}
+                      className="cab-download-all-btn"
+                      onClick={handleDownloadCabAll}
+                      disabled={pdfLoading === 'cabAll'}
+                      title="Combine all available CAB result tabs into one PDF"
                     >
-                      ⚖️ Decision
-                    </button>
-                    <button
-                      className={`cab-tab-btn ${cabResultTab === 'flags' ? 'active' : ''}`}
-                      onClick={() => setCabResultTab('flags')}
-                    >
-                      🚩 Required Changes
-                      {flagCount > 0 && <span className="cab-tab-count">{flagCount}</span>}
+                      {pdfLoading === 'cabAll' ? (
+                        <span className="btn-spinner-wrap">
+                          <span className="btn-spinner" /> Generating...
+                        </span>
+                      ) : (
+                        '⬇ Download All (PDF)'
+                      )}
                     </button>
                   </div>
 
                   <div className="cab-tab-panel">
                     {cabResultTab === 'deliberation' && cabSession && (
-                      <div className="agent-logs">
-                        {visibleAgentLogs.slice(0, visibleLogCount).map((log, idx) => {
-                          const { meta, body, isSynthesis } = parseAgentLog(log);
-                          return (
-                            <div
-                              key={idx}
-                              className="agent-card log-reveal"
-                              style={{ borderLeftColor: meta.color }}
-                            >
-                              <div className="agent-card-header">
-                                <span className="agent-avatar" style={{ background: meta.color }}>
-                                  {meta.icon}
-                                </span>
-                                <span className="agent-card-name" style={{ color: meta.color }}>
-                                  {meta.label}
-                                  {isSynthesis ? ' — Synthesis' : ''}
-                                </span>
+                      <>
+                        <div className="cab-panel-toolbar">
+                          <button
+                            className="btn-download-pdf-sm"
+                            onClick={() => handleDownloadCabTab('deliberation')}
+                            disabled={pdfLoading === 'deliberation'}
+                          >
+                            {pdfLoading === 'deliberation' ? 'Generating...' : '⬇ Download PDF'}
+                          </button>
+                        </div>
+                        <div className="agent-logs">
+                          {visibleAgentLogs.slice(0, visibleLogCount).map((log, idx) => {
+                            const { meta, body, isSynthesis } = parseAgentLog(log);
+                            return (
+                              <div
+                                key={idx}
+                                className="agent-card log-reveal"
+                                style={{ borderLeftColor: meta.color }}
+                              >
+                                <div className="agent-card-header">
+                                  <span className="agent-avatar" style={{ background: meta.color }}>
+                                    {meta.icon}
+                                  </span>
+                                  <span className="agent-card-name" style={{ color: meta.color }}>
+                                    {meta.label}
+                                    {isSynthesis ? ' — Synthesis' : ''}
+                                  </span>
+                                </div>
+                                <div className="agent-card-body">
+                                  <ReactMarkdown>{body}</ReactMarkdown>
+                                </div>
                               </div>
-                              <div className="agent-card-body">
-                                <ReactMarkdown>{body}</ReactMarkdown>
-                              </div>
+                            );
+                          })}
+                          {visibleLogCount < visibleAgentLogs.length && (
+                            <div className="agent-log-entry log-typing">
+                              <span className="typing-dot" />
+                              <span className="typing-dot" />
+                              <span className="typing-dot" />
                             </div>
-                          );
-                        })}
-                        {visibleLogCount < visibleAgentLogs.length && (
-                          <div className="agent-log-entry log-typing">
-                            <span className="typing-dot" />
-                            <span className="typing-dot" />
-                            <span className="typing-dot" />
-                          </div>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      </>
                     )}
 
                     {cabResultTab === 'decision' && (
-                      <div className="decision-panel fade-in">
-                        <DecisionBadge decision={decision} />
-                        <div className="decision-reasoning">
-                          <ReactMarkdown>{stripFlags(reasoning)}</ReactMarkdown>
+                      <div className="fade-in">
+                        <div className="cab-panel-toolbar">
+                          <button
+                            className="btn-download-pdf-sm"
+                            onClick={() => handleDownloadCabTab('decision')}
+                            disabled={pdfLoading === 'decision'}
+                          >
+                            {pdfLoading === 'decision' ? 'Generating...' : '⬇ Download PDF'}
+                          </button>
+                        </div>
+                        <div className="decision-panel">
+                          <DecisionBadge decision={decision} />
+                          <div className="decision-reasoning">
+                            <ReactMarkdown>{stripFlags(reasoning)}</ReactMarkdown>
+                          </div>
                         </div>
                       </div>
                     )}
 
                     {cabResultTab === 'flags' && (
                       <div className="fade-in">
+                        <div className="cab-panel-toolbar">
+                          <button
+                            className="btn-download-pdf-sm"
+                            onClick={() => handleDownloadCabTab('flags')}
+                            disabled={pdfLoading === 'flags'}
+                          >
+                            {pdfLoading === 'flags' ? 'Generating...' : '⬇ Download PDF'}
+                          </button>
+                        </div>
                         <FlagsPanel flags={flags} />
                       </div>
                     )}
