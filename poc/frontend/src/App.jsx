@@ -129,47 +129,112 @@ function isFlagsBlock(log) {
 
 function FlagsPanel({ flags }) {
   const list = Array.isArray(flags) ? flags : [];
+  const counts = list.reduce((acc, f) => {
+    acc[f.severity] = (acc[f.severity] || 0) + 1;
+    return acc;
+  }, {});
   return (
     <div className="flags-panel">
       <h3>🚩 Required Changes & Recommendations</h3>
       {list.length === 0 ? (
         <p className="flags-empty">No required changes flagged.</p>
       ) : (
-        CATEGORY_ORDER.map((category) => {
-          const group = list
-            .filter((f) => f.category === category)
-            .sort(
-              (a, b) =>
-                (SEV_ORDER[a.severity] ?? 3) - (SEV_ORDER[b.severity] ?? 3)
-            );
-          if (group.length === 0) return null;
-          return (
-            <div key={category} className="flag-group">
-              <h4>{category}</h4>
-              {group.map((f, i) => (
-                <div key={i} className="flag-item">
-                  <div className="flag-head">
-                    <span
-                      className={`sev-badge sev-${(f.severity || '').replace(
-                        /[^a-zA-Z]/g,
-                        ''
-                      )}`}
-                    >
-                      {f.severity}
-                    </span>
-                    <span className="flag-element">{f.affected_element}</span>
+        <>
+          <div className="flags-summary">
+            {counts['Must-fix'] > 0 && (
+              <span className="flags-chip chip-mustfix">{counts['Must-fix']} Must-fix</span>
+            )}
+            {counts['Should-fix'] > 0 && (
+              <span className="flags-chip chip-shouldfix">{counts['Should-fix']} Should-fix</span>
+            )}
+            {counts['Nice-to-have'] > 0 && (
+              <span className="flags-chip chip-nice">{counts['Nice-to-have']} Nice-to-have</span>
+            )}
+          </div>
+          {CATEGORY_ORDER.map((category) => {
+            const group = list
+              .filter((f) => f.category === category)
+              .sort(
+                (a, b) =>
+                  (SEV_ORDER[a.severity] ?? 3) - (SEV_ORDER[b.severity] ?? 3)
+              );
+            if (group.length === 0) return null;
+            return (
+              <div key={category} className="flag-group">
+                <h4>{category}</h4>
+                {group.map((f, i) => (
+                  <div key={i} className="flag-item">
+                    <div className="flag-head">
+                      <span
+                        className={`sev-badge sev-${(f.severity || '').replace(
+                          /[^a-zA-Z]/g,
+                          ''
+                        )}`}
+                      >
+                        {f.severity}
+                      </span>
+                      <span className="flag-element">{f.affected_element}</span>
+                    </div>
+                    <p className="flag-rec">{f.recommendation}</p>
+                    {f.raised_by && (
+                      <p className="flag-raised-by">Raised by: {f.raised_by}</p>
+                    )}
                   </div>
-                  <p className="flag-rec">{f.recommendation}</p>
-                  {f.raised_by && (
-                    <p className="flag-raised-by">Raised by: {f.raised_by}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          );
-        })
+                ))}
+              </div>
+            );
+          })}
+        </>
       )}
     </div>
+  );
+}
+
+// Color/icon identity per CAB agent, used to turn the deliberation transcript
+// into distinct colored cards instead of a wall of uniform paragraphs.
+const AGENT_META = {
+  Infrastructure: { color: '#2563eb', icon: '🖥️', label: 'Infrastructure Specialist' },
+  Application: { color: '#7c3aed', icon: '💻', label: 'Application Specialist' },
+  Business: { color: '#059669', icon: '💼', label: 'Business & Service Owner' },
+  Security: { color: '#dc2626', icon: '🛡️', label: 'Security & Compliance Officer' },
+  Chair: { color: '#b45309', icon: '📋', label: 'Change Manager (Chair)' },
+};
+
+// Backend log entries look like "🔍 INFRASTRUCTURE SPECIALIST:\n<opinion>" or
+// "📋 CHANGE MANAGER (SYNTHESIS):\n<synthesis>". Extract which agent it is and
+// the body text so each can be rendered as its own colored card.
+function parseAgentLog(log) {
+  const text = stripFlags(log || '').trim();
+  const match = text.match(/^(?:🔍|📋)\s*([^:]+):\s*([\s\S]*)$/);
+  const rawName = match ? match[1].toUpperCase() : '';
+  const body = match ? match[2].trim() : text;
+
+  let key = 'Chair';
+  if (rawName.includes('INFRASTRUCTURE')) key = 'Infrastructure';
+  else if (rawName.includes('APPLICATION')) key = 'Application';
+  else if (rawName.includes('BUSINESS')) key = 'Business';
+  else if (rawName.includes('SECURITY')) key = 'Security';
+
+  return {
+    meta: AGENT_META[key],
+    body,
+    isSynthesis: rawName.includes('SYNTHESIS'),
+  };
+}
+
+const DECISION_META = {
+  'Approved': { color: '#15803d', bg: '#dcfce7', icon: '✓' },
+  'Rejected': { color: '#b91c1c', bg: '#fee2e2', icon: '✕' },
+  'Conditional Approval': { color: '#b45309', bg: '#fef3c7', icon: '△' },
+  'Pending Review': { color: '#475569', bg: '#f1f5f9', icon: '…' },
+};
+
+function DecisionBadge({ decision }) {
+  const meta = DECISION_META[decision] || DECISION_META['Pending Review'];
+  return (
+    <span className="decision-badge" style={{ color: meta.color, background: meta.bg }}>
+      <span className="decision-badge-icon">{meta.icon}</span> {decision}
+    </span>
   );
 }
 
@@ -186,6 +251,7 @@ function App() {
   const [filterStatus, setFilterStatus] = useState('All');
   const [visibleLogCount, setVisibleLogCount] = useState(0);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [cabResultTab, setCabResultTab] = useState('deliberation');
   const revealTimer = useRef(null);
 
   const [formData, setFormData] = useState({
@@ -269,6 +335,7 @@ function App() {
       setSelectedRfc(response.data);
       setCabSession(null);
       setVisibleLogCount(0);
+      setCabResultTab(response.data.cab_decision ? 'decision' : 'deliberation');
     } catch (error) {
       showToast('Unable to load RFC details.', 'error');
     }
@@ -280,6 +347,7 @@ function App() {
       const response = await axios.post(`${API_BASE}/rfc/${rfc_id}/trigger-cab`);
       setCabSession(response.data);
       setVisibleLogCount(0);
+      setCabResultTab('deliberation');
 
       const total = (response.data.agent_logs || []).filter((l) => !isFlagsBlock(l)).length;
       let count = 0;
@@ -739,52 +807,92 @@ function App() {
                 </button>
               )}
 
-            {cabSession && (
-              <div className="cab-session">
-                <h3>CAB Deliberation Session</h3>
-                <div className="agent-logs">
-                  {visibleAgentLogs.slice(0, visibleLogCount).map((log, idx) => (
-                    <div key={idx} className="agent-log-entry log-reveal">
-                      <ReactMarkdown>{stripFlags(log)}</ReactMarkdown>
-                    </div>
-                  ))}
-                  {visibleLogCount < visibleAgentLogs.length && (
-                    <div className="agent-log-entry log-typing">
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
-                    </div>
-                  )}
-                </div>
+            {(cabSession || selectedRfc.cab_decision) && (() => {
+              const decision = cabSession ? cabSession.cab_decision : selectedRfc.cab_decision;
+              const reasoning = cabSession ? cabSession.cab_reasoning : selectedRfc.cab_reasoning;
+              const flags = cabSession ? cabSession.cab_flags : selectedRfc.cab_flags;
+              const flagCount = Array.isArray(flags) ? flags.length : 0;
 
-                {visibleLogCount >= visibleAgentLogs.length && (
-                  <>
-                    <div className="cab-decision-box fade-in">
-                      <h4>Final Decision: {cabSession.cab_decision}</h4>
-                      <div className="decision-reasoning">
-                        <ReactMarkdown>{stripFlags(cabSession.cab_reasoning)}</ReactMarkdown>
+              return (
+                <div className="cab-session">
+                  <div className="cab-tabs">
+                    {cabSession && (
+                      <button
+                        className={`cab-tab-btn ${cabResultTab === 'deliberation' ? 'active' : ''}`}
+                        onClick={() => setCabResultTab('deliberation')}
+                      >
+                        💬 Deliberation
+                      </button>
+                    )}
+                    <button
+                      className={`cab-tab-btn ${cabResultTab === 'decision' ? 'active' : ''}`}
+                      onClick={() => setCabResultTab('decision')}
+                    >
+                      ⚖️ Decision
+                    </button>
+                    <button
+                      className={`cab-tab-btn ${cabResultTab === 'flags' ? 'active' : ''}`}
+                      onClick={() => setCabResultTab('flags')}
+                    >
+                      🚩 Required Changes
+                      {flagCount > 0 && <span className="cab-tab-count">{flagCount}</span>}
+                    </button>
+                  </div>
+
+                  <div className="cab-tab-panel">
+                    {cabResultTab === 'deliberation' && cabSession && (
+                      <div className="agent-logs">
+                        {visibleAgentLogs.slice(0, visibleLogCount).map((log, idx) => {
+                          const { meta, body, isSynthesis } = parseAgentLog(log);
+                          return (
+                            <div
+                              key={idx}
+                              className="agent-card log-reveal"
+                              style={{ borderLeftColor: meta.color }}
+                            >
+                              <div className="agent-card-header">
+                                <span className="agent-avatar" style={{ background: meta.color }}>
+                                  {meta.icon}
+                                </span>
+                                <span className="agent-card-name" style={{ color: meta.color }}>
+                                  {meta.label}
+                                  {isSynthesis ? ' — Synthesis' : ''}
+                                </span>
+                              </div>
+                              <div className="agent-card-body">
+                                <ReactMarkdown>{body}</ReactMarkdown>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {visibleLogCount < visibleAgentLogs.length && (
+                          <div className="agent-log-entry log-typing">
+                            <span className="typing-dot" />
+                            <span className="typing-dot" />
+                            <span className="typing-dot" />
+                          </div>
+                        )}
                       </div>
-                    </div>
+                    )}
 
-                    <FlagsPanel flags={cabSession.cab_flags} />
-                  </>
-                )}
-              </div>
-            )}
+                    {cabResultTab === 'decision' && (
+                      <div className="decision-panel fade-in">
+                        <DecisionBadge decision={decision} />
+                        <div className="decision-reasoning">
+                          <ReactMarkdown>{stripFlags(reasoning)}</ReactMarkdown>
+                        </div>
+                      </div>
+                    )}
 
-            {selectedRfc.cab_decision && !cabSession && (
-              <div className="cab-session">
-                <h3>CAB Decision (On Record)</h3>
-                <div className="cab-decision-box">
-                  <h4>Final Decision: {selectedRfc.cab_decision}</h4>
-                  <div className="decision-reasoning">
-                    <ReactMarkdown>{stripFlags(selectedRfc.cab_reasoning)}</ReactMarkdown>
+                    {cabResultTab === 'flags' && (
+                      <div className="fade-in">
+                        <FlagsPanel flags={flags} />
+                      </div>
+                    )}
                   </div>
                 </div>
-
-                <FlagsPanel flags={selectedRfc.cab_flags} />
-              </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}
