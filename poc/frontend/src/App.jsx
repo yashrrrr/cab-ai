@@ -16,6 +16,16 @@ const API_BASE = 'http://localhost:8000';
 // kept in sync with the theme's brand accent.
 const ACCENT_TEAL = '#0f6e56';
 
+// PDF, Word, PowerPoint, Excel — matches ALLOWED_DOCUMENT_EXTENSIONS in the
+// backend (poc/backend/main.py). Legacy binary formats (.doc, .ppt, .xls)
+// aren't supported.
+const ALLOWED_DOC_EXTENSIONS = ['.pdf', '.docx', '.pptx', '.xlsx'];
+const ALLOWED_DOC_ACCEPT =
+  '.pdf,.docx,.pptx,.xlsx,application/pdf,' +
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document,' +
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation,' +
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
 const STATUS_ICONS = {
   'Submitted': '⏳',
 };
@@ -253,11 +263,10 @@ const THEME_STORAGE_KEY = 'ust-theme';
 const SIDEBAR_STORAGE_KEY = 'ust-sidebar-collapsed';
 
 function getInitialTheme() {
+  // Always default to light regardless of system preference — dark mode is
+  // opt-in only, via the toggle in the header or Settings.
   const saved = localStorage.getItem(THEME_STORAGE_KEY);
-  if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-    ? 'dark'
-    : 'light';
+  return saved === 'dark' ? 'dark' : 'light';
 }
 
 function getInitialSidebarCollapsed() {
@@ -431,8 +440,14 @@ function App() {
     e.target.value = ''; // allow re-selecting the same file later (e.g. after Remove)
     if (!file) return;
 
-    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-      showToast('Only PDF documents are supported.', 'error');
+    const hasAllowedExtension = ALLOWED_DOC_EXTENSIONS.some((ext) =>
+      file.name.toLowerCase().endsWith(ext)
+    );
+    if (!hasAllowedExtension) {
+      showToast(
+        'Unsupported file type. Please upload a PDF, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) document.',
+        'error'
+      );
       return;
     }
 
@@ -677,7 +692,15 @@ function App() {
 
       <header className="header">
         <div className="header-brand">
-          <img className="brand-logo" src="/assets/ust-logo.svg" alt="UST logo" />
+          <button
+            type="button"
+            className="brand-logo-btn"
+            onClick={() => setActiveTab('list')}
+            title="Go to RFC Register"
+            aria-label="Go to RFC Register"
+          >
+            <img className="brand-logo" src="/assets/ust-logo.svg" alt="UST logo" />
+          </button>
           <div>
             <h1>Change Advisory Board Platform</h1>
             <p>AI-assisted RFC classification, routing, and deliberation</p>
@@ -897,15 +920,15 @@ function App() {
             </p>
             <form onSubmit={handleSubmitRfc}>
               <div className="form-group">
-                <label>Supporting Document (PDF, optional)</label>
+                <label>Supporting Document (PDF, Word, PowerPoint, or Excel — optional)</label>
                 <p className="form-subtitle">
-                  Upload a PRD, BRD, or RFC document — it will be used to pre-fill the fields below (review before submitting), and shared with the CAB agents during review.
+                  Upload a BRD, FRD, PRD, or RFC document (.pdf, .docx, .pptx, .xlsx) — it will be used to pre-fill the fields below (review before submitting), and shared with the CAB agents during review.
                 </p>
                 {!uploadedDoc ? (
                   <>
                     <input
                       type="file"
-                      accept="application/pdf"
+                      accept={ALLOWED_DOC_ACCEPT}
                       onChange={handleDocumentUpload}
                       disabled={docParsing}
                     />

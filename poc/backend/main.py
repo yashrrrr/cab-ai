@@ -14,17 +14,22 @@ import uuid
 import sqlite3
 import os
 import shutil
+import glob
 
 from cab_orchestrator import run_ai_cab_session
 from classification import classify_rfc, evaluate_no_impact, match_scc
 from db_init import init_db, migrate_db, get_db_connection
-from document_extraction import extract_pdf_text, extract_rfc_fields
+from document_extraction import extract_document_text, extract_rfc_fields
 
-# Supporting-document uploads: PDFs land in uploads/tmp/{token}.pdf until the
-# RFC they're paired with is created, then move to uploads/{rfc_id}/.
+# Supporting-document uploads: files land in uploads/tmp/{token}{ext} until
+# the RFC they're paired with is created, then move to uploads/{rfc_id}/.
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 UPLOAD_TMP_DIR = os.path.join(UPLOAD_DIR, "tmp")
 os.makedirs(UPLOAD_TMP_DIR, exist_ok=True)
+
+# PDF, Word, PowerPoint, Excel — the modern Office Open XML formats. Legacy
+# binary formats (.doc, .ppt, .xls) aren't supported; see document_extraction.py.
+ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx"}
 
 # ─────────────────────────────────────────────────────────────
 # FastAPI App Setup
@@ -133,26 +138,30 @@ async def health():
 @app.post("/rfc/upload-document")
 async def upload_document(file: UploadFile = File(...)):
     """
-    Upload a supporting document (PDF only) ahead of RFC submission.
-    Extracts text and asks the LLM to suggest values for the submission
-    form fields. Returns a document_token to pass back on /rfc/submit so
-    the file gets paired with the created RFC.
+    Upload a supporting document (PDF, Word, PowerPoint, or Excel) ahead of
+    RFC submission. Extracts text and asks the LLM to suggest values for the
+    submission form fields. Returns a document_token to pass back on
+    /rfc/submit so the file gets paired with the created RFC.
     """
-    filename = file.filename or "document.pdf"
-    if file.content_type != "application/pdf" and not filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=415, detail="Only PDF documents are supported.")
+    filename = file.filename or "document"
+    ext = os.path.splitext(filename.lower())[1]
+    if ext not in ALLOWED_DOCUMENT_EXTENSIONS:
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported file type. Please upload a PDF, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) document.",
+        )
 
     document_token = str(uuid.uuid4())
-    tmp_path = os.path.join(UPLOAD_TMP_DIR, f"{document_token}.pdf")
+    tmp_path = os.path.join(UPLOAD_TMP_DIR, f"{document_token}{ext}")
 
     with open(tmp_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
     try:
-        document_text = extract_pdf_text(tmp_path)
+        document_text = extract_document_text(tmp_path, filename)
     except Exception:
         os.remove(tmp_path)
-        raise HTTPException(status_code=400, detail="Could not read this PDF — it may be corrupt or unsupported.")
+        raise HTTPException(status_code=400, detail="Could not read this document — it may be corrupt or unsupported.")
 
     extracted_fields = extract_rfc_fields(document_text)
 
@@ -211,17 +220,21 @@ async def submit_rfc(req: RFCSubmissionRequest):
             req.change_type = ChangeTypeEnum.NORMAL
 
     # Pair an uploaded supporting document (if any) with this RFC — moves the
-    # temp PDF from uploads/tmp/ into a per-RFC folder and re-extracts text
-    # (cheap, and avoids trusting a client-supplied cache of the text).
+    # temp file from uploads/tmp/ into a per-RFC folder and re-extracts text
+    # (cheap, and avoids trusting a client-supplied cache of the text). The
+    # temp file's extension isn't known here (PDF/Word/PowerPoint/Excel), so
+    # find it by token rather than assuming .pdf.
     document_filename = None
     document_path = None
     document_text = None
     if req.document_token:
-        tmp_path = os.path.join(UPLOAD_TMP_DIR, f"{req.document_token}.pdf")
-        if os.path.exists(tmp_path):
-            safe_name = os.path.basename(req.document_filename or "document.pdf") or "document.pdf"
-            if not safe_name.lower().endswith(".pdf"):
-                safe_name += ".pdf"
+        matches = glob.glob(os.path.join(UPLOAD_TMP_DIR, f"{req.document_token}.*"))
+        tmp_path = matches[0] if matches else None
+        if tmp_path and os.path.exists(tmp_path):
+            ext = os.path.splitext(tmp_path)[1]
+            safe_name = os.path.basename(req.document_filename or f"document{ext}") or f"document{ext}"
+            if not safe_name.lower().endswith(ext):
+                safe_name += ext
             rfc_upload_dir = os.path.join(UPLOAD_DIR, rfc_id)
             os.makedirs(rfc_upload_dir, exist_ok=True)
             final_path = os.path.join(rfc_upload_dir, safe_name)
@@ -229,7 +242,7 @@ async def submit_rfc(req: RFCSubmissionRequest):
             document_filename = safe_name
             document_path = final_path
             try:
-                document_text = extract_pdf_text(final_path)
+                document_text = extract_document_text(final_path, safe_name)
             except Exception:
                 document_text = None
         # A missing/expired temp file (e.g. stale token) is not an error —

@@ -59,46 +59,6 @@
   --skeleton-shine: #dde3ec;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-
-    --bg-page: #0a0b0d;
-    --bg-surface: #1a1c22;
-    --bg-surface-alt: #17191f;
-    --bg-surface-hover: #22252c;
-
-    --text-primary: #f1f5f9;
-    --text-secondary: #b6c0cc;
-    --text-muted: #7c8695;
-
-    --border-color: #2a2d34;
-    --border-hairline: rgba(255, 255, 255, 0.1);
-    --shadow-sm: none;
-    --shadow-md: none;
-
-    --accent-hover: #14a37e;
-    --accent-soft: rgba(15, 110, 86, 0.22);
-    --accent-soft-strong: rgba(15, 110, 86, 0.32);
-
-    --status-danger-bg: rgba(220, 38, 38, 0.18);
-    --status-danger-text: #f87171;
-    --status-warning-bg: rgba(180, 83, 9, 0.2);
-    --status-warning-text: #fbbf24;
-    --status-success-bg: rgba(21, 128, 61, 0.2);
-    --status-success-text: #4ade80;
-    --status-info-bg: rgba(37, 99, 235, 0.2);
-    --status-info-text: #60a5fa;
-    --status-orange-bg: rgba(179, 84, 12, 0.2);
-    --status-orange-text: #fb923c;
-    --status-cyan-bg: rgba(14, 116, 144, 0.2);
-    --status-cyan-text: #22d3ee;
-
-    --skeleton-base: #22252c;
-    --skeleton-shine: #2a2d34;
-  }
-}
-
 :root[data-theme="dark"] {
   color-scheme: dark;
 
@@ -180,6 +140,26 @@ body {
   display: flex;
   align-items: center;
   gap: 18px;
+}
+
+.brand-logo-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 10px;
+  flex-shrink: 0;
+  line-height: 0;
+  transition: transform 0.18s ease, filter 0.18s ease;
+}
+
+.brand-logo-btn:hover {
+  transform: scale(1.06);
+  filter: brightness(1.08);
+}
+
+.brand-logo-btn:active {
+  transform: scale(0.96);
 }
 
 .brand-logo {
