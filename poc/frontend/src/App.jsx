@@ -148,6 +148,14 @@ function isFlagsBlock(log) {
   return typeof log === 'string' && log.includes('REQUIRED CHANGES & RECOMMENDATIONS');
 }
 
+// The Chair's full synthesis (Decision/Key Concerns/Conditions/Recommendations)
+// is the same text shown, parsed into color-coded sections, in the Decision
+// tab — so it's filtered out of the Deliberation log stream to avoid showing
+// the whole thing twice.
+function isSynthesisBlock(log) {
+  return typeof log === 'string' && log.includes('CHANGE MANAGER (SYNTHESIS)');
+}
+
 function FlagsPanel({ flags }) {
   const list = Array.isArray(flags) ? flags : [];
   const counts = list.reduce((acc, f) => {
@@ -256,6 +264,84 @@ function DecisionBadge({ decision }) {
     <span className="decision-badge" style={{ color: meta.color, background: meta.bg }}>
       <span className="decision-badge-icon">{meta.icon}</span> {decision}
     </span>
+  );
+}
+
+// The Chair's synthesis uses **Label:** as an inline bold marker for each
+// section (not real markdown headers), so plain ReactMarkdown renders every
+// section as visually-identical gray text. Recognize the known labels and
+// split the text into distinct, color-coded sections instead.
+// Fixed (non-theme-varying) hex, matching DECISION_META/AGENT_META above —
+// this panel is an intentionally constant "white card on a dark console"
+// look regardless of the app's light/dark theme, so theme-aware CSS vars
+// (tuned for their own surface colors) would read wrong here.
+const DECISION_SECTION_META = {
+  'decision': { icon: '🎯', color: '#0f6e56' },
+  'key concerns': { icon: '⚠️', color: '#b45309' },
+  'concerns': { icon: '⚠️', color: '#b45309' },
+  'conditions/blockers': { icon: '🚧', color: '#b91c1c' },
+  'blockers/conditions': { icon: '🚧', color: '#b91c1c' },
+  'conditions': { icon: '🚧', color: '#b91c1c' },
+  'blockers': { icon: '🚧', color: '#b91c1c' },
+  'recommendations': { icon: '💡', color: '#1d4ed8' },
+};
+
+function parseDecisionSections(text) {
+  const clean = (text || '').trim();
+  const regex = /\*\*([A-Za-z /]+?):?\*\*:?/g;
+  const matches = [...clean.matchAll(regex)];
+
+  if (matches.length === 0) {
+    return [{ label: null, meta: null, body: clean }];
+  }
+
+  const sections = [];
+  matches.forEach((match, idx) => {
+    const label = match[1].trim();
+    const start = match.index + match[0].length;
+    const end = idx + 1 < matches.length ? matches[idx + 1].index : clean.length;
+    const body = clean.slice(start, end).trim();
+    if (!body) return;
+    sections.push({ label, meta: DECISION_SECTION_META[label.toLowerCase()], body });
+  });
+  return sections.length > 0 ? sections : [{ label: null, meta: null, body: clean }];
+}
+
+// Sections whose label (lowercased) is in `labels` — used to pull "Key
+// Concerns" or "Conditions/Blockers" out into their own tabs.
+function findSections(sections, labels) {
+  const set = new Set(labels);
+  return sections.filter((s) => s.label && set.has(s.label.toLowerCase()));
+}
+
+function SectionList({ sections }) {
+  if (sections.length === 0) {
+    return <p className="flags-empty">Nothing to show here.</p>;
+  }
+  return (
+    <div className="decision-reasoning">
+      {sections.map((section, idx) => (
+        <div
+          key={idx}
+          className={`decision-section ${section.meta ? 'decision-section-colored' : ''}`}
+          style={
+            section.meta
+              ? { borderLeftColor: section.meta.color, '--section-accent': section.meta.color }
+              : undefined
+          }
+        >
+          {section.label && (
+            <div
+              className="decision-section-title"
+              style={section.meta ? { color: section.meta.color } : undefined}
+            >
+              {section.meta?.icon} {section.label}
+            </div>
+          )}
+          <ReactMarkdown>{section.body}</ReactMarkdown>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -542,7 +628,8 @@ function App() {
       setVisibleLogCount(0);
       setCabResultTab('deliberation');
 
-      const total = (response.data.agent_logs || []).filter((l) => !isFlagsBlock(l)).length;
+      const total = (response.data.agent_logs || [])
+        .filter((l) => !isFlagsBlock(l) && !isSynthesisBlock(l)).length;
       let count = 0;
       clearInterval(revealTimer.current);
       revealTimer.current = setInterval(() => {
@@ -684,7 +771,9 @@ function App() {
   }, [rfcs, searchQuery, filterType, filterStatus]);
 
   // Deliberation log entries minus the required-changes summary (shown via FlagsPanel)
-  const visibleAgentLogs = (cabSession?.agent_logs || []).filter((l) => !isFlagsBlock(l));
+  const visibleAgentLogs = (cabSession?.agent_logs || []).filter(
+    (l) => !isFlagsBlock(l) && !isSynthesisBlock(l)
+  );
 
   return (
     <div className="app">
@@ -1197,6 +1286,23 @@ function App() {
               const flags = cabSession ? cabSession.cab_flags : selectedRfc.cab_flags;
               const flagCount = Array.isArray(flags) ? flags.length : 0;
 
+              // Split the Chair's synthesis into its labeled sections. Key
+              // Concerns and Conditions/Blockers get their own tabs;
+              // "Recommendations" is intentionally dropped here — Required
+              // Changes already shows the same content, structured and
+              // deduped, so keeping both would just repeat it.
+              const reasoningSections = parseDecisionSections(stripFlags(reasoning));
+              const keyConcernSections = findSections(reasoningSections, ['key concerns', 'concerns']);
+              const conditionSections = findSections(reasoningSections, [
+                'conditions/blockers',
+                'blockers/conditions',
+                'conditions',
+                'blockers',
+              ]);
+              const decisionOnlySections = reasoningSections.filter(
+                (s) => !s.label || s.label.toLowerCase() === 'decision'
+              );
+
               return (
                 <div className="cab-session">
                   <div className="cab-tabs">
@@ -1213,8 +1319,24 @@ function App() {
                         className={`cab-tab-btn ${cabResultTab === 'decision' ? 'active' : ''}`}
                         onClick={() => setCabResultTab('decision')}
                       >
-                        ⚖️ Decision
+                        🎯 Decision
                       </button>
+                      {keyConcernSections.length > 0 && (
+                        <button
+                          className={`cab-tab-btn ${cabResultTab === 'keyConcerns' ? 'active' : ''}`}
+                          onClick={() => setCabResultTab('keyConcerns')}
+                        >
+                          ⚠️ Key Concerns
+                        </button>
+                      )}
+                      {conditionSections.length > 0 && (
+                        <button
+                          className={`cab-tab-btn ${cabResultTab === 'conditions' ? 'active' : ''}`}
+                          onClick={() => setCabResultTab('conditions')}
+                        >
+                          🚧 Conditions/Blockers
+                        </button>
+                      )}
                       <button
                         className={`cab-tab-btn ${cabResultTab === 'flags' ? 'active' : ''}`}
                         onClick={() => setCabResultTab('flags')}
@@ -1299,9 +1421,23 @@ function App() {
                         </div>
                         <div className="decision-panel">
                           <DecisionBadge decision={decision} />
-                          <div className="decision-reasoning">
-                            <ReactMarkdown>{stripFlags(reasoning)}</ReactMarkdown>
-                          </div>
+                          <SectionList sections={decisionOnlySections} />
+                        </div>
+                      </div>
+                    )}
+
+                    {cabResultTab === 'keyConcerns' && (
+                      <div className="fade-in">
+                        <div className="decision-panel">
+                          <SectionList sections={keyConcernSections} />
+                        </div>
+                      </div>
+                    )}
+
+                    {cabResultTab === 'conditions' && (
+                      <div className="fade-in">
+                        <div className="decision-panel">
+                          <SectionList sections={conditionSections} />
                         </div>
                       </div>
                     )}
