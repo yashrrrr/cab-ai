@@ -1,7 +1,13 @@
 """
-Supporting Document Extraction — PDF text extraction + LLM field auto-fill
-Powers the "upload a PRD/BRD/RFC PDF" flow on RFC submission: pulls raw text
-out of the PDF, then asks the model to map that text onto RFC form fields.
+Supporting Document Extraction — text extraction + LLM field auto-fill
+Powers the "upload a BRD/FRD/PRD/RFC document" flow on RFC submission: pulls
+raw text out of the uploaded file, then asks the model to map that text onto
+RFC form fields.
+
+Supported formats: PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx).
+Legacy binary formats (.doc, .ppt, .xls) are NOT supported — parsing those
+reliably needs much heavier tooling (no good pure-Python reader); ask
+requestors to save as the modern Office Open XML format instead.
 """
 
 from openai import OpenAI
@@ -10,6 +16,9 @@ import json
 import os
 
 from pypdf import PdfReader
+from docx import Document as DocxDocument
+from pptx import Presentation
+import openpyxl
 
 # Same provider/client as cab_orchestrator.py — GitHub Models endpoint via the
 # OpenAI SDK. Kept as its own small client here rather than importing from
@@ -67,6 +76,65 @@ def extract_pdf_text(file_path: str) -> str:
     reader = PdfReader(file_path)
     pages = [page.extract_text() or "" for page in reader.pages]
     return "\n".join(pages).strip()
+
+
+def extract_docx_text(file_path: str) -> str:
+    """Extract paragraph and table text from a Word (.docx) file."""
+    doc = DocxDocument(file_path)
+    parts = [p.text for p in doc.paragraphs if p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                if cell.text.strip():
+                    parts.append(cell.text)
+    return "\n".join(parts).strip()
+
+
+def extract_pptx_text(file_path: str) -> str:
+    """Extract text from every text frame on every slide of a PowerPoint (.pptx) file."""
+    prs = Presentation(file_path)
+    parts = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                text = "\n".join(p.text for p in shape.text_frame.paragraphs if p.text.strip())
+                if text:
+                    parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def extract_xlsx_text(file_path: str) -> str:
+    """Extract cell values (row by row, sheet by sheet) from an Excel (.xlsx) file."""
+    workbook = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+    parts = []
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows(values_only=True):
+            cells = [str(c) for c in row if c is not None and str(c).strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n".join(parts).strip()
+
+
+EXTRACTORS_BY_EXTENSION = {
+    ".pdf": extract_pdf_text,
+    ".docx": extract_docx_text,
+    ".pptx": extract_pptx_text,
+    ".xlsx": extract_xlsx_text,
+}
+
+
+def extract_document_text(file_path: str, filename: str) -> str:
+    """
+    Dispatch to the right extractor based on the file's extension.
+    Raises ValueError for unsupported extensions, and whatever the
+    underlying library raises for unreadable/corrupt files — callers
+    should surface both as a 400 to the requestor.
+    """
+    ext = os.path.splitext(filename.lower())[1]
+    extractor = EXTRACTORS_BY_EXTENSION.get(ext)
+    if extractor is None:
+        raise ValueError(f"Unsupported file type: {ext or filename}")
+    return extractor(file_path)
 
 
 def extract_rfc_fields(document_text: str) -> Dict:

@@ -16,6 +16,16 @@ const API_BASE = 'http://localhost:8000';
 // kept in sync with the theme's brand accent.
 const ACCENT_TEAL = '#0f6e56';
 
+// PDF, Word, PowerPoint, Excel — matches ALLOWED_DOCUMENT_EXTENSIONS in the
+// backend (poc/backend/main.py). Legacy binary formats (.doc, .ppt, .xls)
+// aren't supported.
+const ALLOWED_DOC_EXTENSIONS = ['.pdf', '.docx', '.pptx', '.xlsx'];
+const ALLOWED_DOC_ACCEPT =
+  '.pdf,.docx,.pptx,.xlsx,application/pdf,' +
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document,' +
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation,' +
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
 const STATUS_ICONS = {
   'Submitted': '⏳',
 };
@@ -138,6 +148,14 @@ function isFlagsBlock(log) {
   return typeof log === 'string' && log.includes('REQUIRED CHANGES & RECOMMENDATIONS');
 }
 
+// The Chair's full synthesis (Decision/Key Concerns/Conditions/Recommendations)
+// is the same text shown, parsed into color-coded sections, in the Decision
+// tab — so it's filtered out of the Deliberation log stream to avoid showing
+// the whole thing twice.
+function isSynthesisBlock(log) {
+  return typeof log === 'string' && log.includes('CHANGE MANAGER (SYNTHESIS)');
+}
+
 function FlagsPanel({ flags }) {
   const list = Array.isArray(flags) ? flags : [];
   const counts = list.reduce((acc, f) => {
@@ -249,15 +267,92 @@ function DecisionBadge({ decision }) {
   );
 }
 
+// The Chair's synthesis uses **Label:** as an inline bold marker for each
+// section (not real markdown headers), so plain ReactMarkdown renders every
+// section as visually-identical gray text. Recognize the known labels and
+// split the text into distinct, color-coded sections instead.
+// Fixed (non-theme-varying) hex, matching DECISION_META/AGENT_META above —
+// this panel is an intentionally constant "white card on a dark console"
+// look regardless of the app's light/dark theme, so theme-aware CSS vars
+// (tuned for their own surface colors) would read wrong here.
+const DECISION_SECTION_META = {
+  'decision': { icon: '🎯', color: '#0f6e56' },
+  'key concerns': { icon: '⚠️', color: '#b45309' },
+  'concerns': { icon: '⚠️', color: '#b45309' },
+  'conditions/blockers': { icon: '🚧', color: '#b91c1c' },
+  'blockers/conditions': { icon: '🚧', color: '#b91c1c' },
+  'conditions': { icon: '🚧', color: '#b91c1c' },
+  'blockers': { icon: '🚧', color: '#b91c1c' },
+  'recommendations': { icon: '💡', color: '#1d4ed8' },
+};
+
+function parseDecisionSections(text) {
+  const clean = (text || '').trim();
+  const regex = /\*\*([A-Za-z /]+?):?\*\*:?/g;
+  const matches = [...clean.matchAll(regex)];
+
+  if (matches.length === 0) {
+    return [{ label: null, meta: null, body: clean }];
+  }
+
+  const sections = [];
+  matches.forEach((match, idx) => {
+    const label = match[1].trim();
+    const start = match.index + match[0].length;
+    const end = idx + 1 < matches.length ? matches[idx + 1].index : clean.length;
+    const body = clean.slice(start, end).trim();
+    if (!body) return;
+    sections.push({ label, meta: DECISION_SECTION_META[label.toLowerCase()], body });
+  });
+  return sections.length > 0 ? sections : [{ label: null, meta: null, body: clean }];
+}
+
+// Sections whose label (lowercased) is in `labels` — used to pull "Key
+// Concerns" or "Conditions/Blockers" out into their own tabs.
+function findSections(sections, labels) {
+  const set = new Set(labels);
+  return sections.filter((s) => s.label && set.has(s.label.toLowerCase()));
+}
+
+function SectionList({ sections }) {
+  if (sections.length === 0) {
+    return <p className="flags-empty">Nothing to show here.</p>;
+  }
+  return (
+    <div className="decision-reasoning">
+      {sections.map((section, idx) => (
+        <div
+          key={idx}
+          className={`decision-section ${section.meta ? 'decision-section-colored' : ''}`}
+          style={
+            section.meta
+              ? { borderLeftColor: section.meta.color, '--section-accent': section.meta.color }
+              : undefined
+          }
+        >
+          {section.label && (
+            <div
+              className="decision-section-title"
+              style={section.meta ? { color: section.meta.color } : undefined}
+            >
+              {section.meta?.icon} {section.label}
+            </div>
+          )}
+          <ReactMarkdown>{section.body}</ReactMarkdown>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const THEME_STORAGE_KEY = 'ust-theme';
 const SIDEBAR_STORAGE_KEY = 'ust-sidebar-collapsed';
 
 function getInitialTheme() {
+  // Always default to light regardless of system preference — dark mode is
+  // opt-in only, via the toggle in the header or Settings.
   const saved = localStorage.getItem(THEME_STORAGE_KEY);
-  if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-    ? 'dark'
-    : 'light';
+  return saved === 'dark' ? 'dark' : 'light';
 }
 
 function getInitialSidebarCollapsed() {
@@ -449,8 +544,14 @@ function App() {
     e.target.value = ''; // allow re-selecting the same file later (e.g. after Remove)
     if (!file) return;
 
-    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-      showToast('Only PDF documents are supported.', 'error');
+    const hasAllowedExtension = ALLOWED_DOC_EXTENSIONS.some((ext) =>
+      file.name.toLowerCase().endsWith(ext)
+    );
+    if (!hasAllowedExtension) {
+      showToast(
+        'Unsupported file type. Please upload a PDF, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) document.',
+        'error'
+      );
       return;
     }
 
@@ -565,7 +666,8 @@ function App() {
       setVisibleLogCount(0);
       setCabResultTab('deliberation');
 
-      const total = (response.data.agent_logs || []).filter((l) => !isFlagsBlock(l)).length;
+      const total = (response.data.agent_logs || [])
+        .filter((l) => !isFlagsBlock(l) && !isSynthesisBlock(l)).length;
       let count = 0;
       clearInterval(revealTimer.current);
       revealTimer.current = setInterval(() => {
@@ -707,7 +809,9 @@ function App() {
   }, [rfcs, searchQuery, filterType, filterStatus]);
 
   // Deliberation log entries minus the required-changes summary (shown via FlagsPanel)
-  const visibleAgentLogs = (cabSession?.agent_logs || []).filter((l) => !isFlagsBlock(l));
+  const visibleAgentLogs = (cabSession?.agent_logs || []).filter(
+    (l) => !isFlagsBlock(l) && !isSynthesisBlock(l)
+  );
 
   return (
     <div className="app">
@@ -715,7 +819,15 @@ function App() {
 
       <header className="header">
         <div className="header-brand">
-          <img className="brand-logo" src="/assets/ust-logo.svg" alt="UST logo" />
+          <button
+            type="button"
+            className="brand-logo-btn"
+            onClick={() => setActiveTab('list')}
+            title="Go to RFC Register"
+            aria-label="Go to RFC Register"
+          >
+            <img className="brand-logo" src="/assets/ust-logo.svg" alt="UST logo" />
+          </button>
           <div>
             <h1>Change Advisory Board Platform</h1>
             <p>AI-assisted RFC classification, routing, and deliberation</p>
@@ -938,15 +1050,15 @@ function App() {
             </p>
             <form onSubmit={handleSubmitRfc}>
               <div className="form-group">
-                <label>Supporting Document (PDF, optional)</label>
+                <label>Supporting Document (PDF, Word, PowerPoint, or Excel — optional)</label>
                 <p className="form-subtitle">
-                  Upload a PRD, BRD, or RFC document — it will be used to pre-fill the fields below (review before submitting), and shared with the CAB agents during review.
+                  Upload a BRD, FRD, PRD, or RFC document (.pdf, .docx, .pptx, .xlsx) — it will be used to pre-fill the fields below (review before submitting), and shared with the CAB agents during review.
                 </p>
                 {!uploadedDoc ? (
                   <>
                     <input
                       type="file"
-                      accept="application/pdf"
+                      accept={ALLOWED_DOC_ACCEPT}
                       onChange={handleDocumentUpload}
                       disabled={docParsing}
                     />
@@ -1283,6 +1395,23 @@ function App() {
               const flags = cabSession ? cabSession.cab_flags : selectedRfc.cab_flags;
               const flagCount = Array.isArray(flags) ? flags.length : 0;
 
+              // Split the Chair's synthesis into its labeled sections. Key
+              // Concerns and Conditions/Blockers get their own tabs;
+              // "Recommendations" is intentionally dropped here — Required
+              // Changes already shows the same content, structured and
+              // deduped, so keeping both would just repeat it.
+              const reasoningSections = parseDecisionSections(stripFlags(reasoning));
+              const keyConcernSections = findSections(reasoningSections, ['key concerns', 'concerns']);
+              const conditionSections = findSections(reasoningSections, [
+                'conditions/blockers',
+                'blockers/conditions',
+                'conditions',
+                'blockers',
+              ]);
+              const decisionOnlySections = reasoningSections.filter(
+                (s) => !s.label || s.label.toLowerCase() === 'decision'
+              );
+
               return (
                 <div className="cab-session">
                   <div className="cab-tabs">
@@ -1299,8 +1428,24 @@ function App() {
                         className={`cab-tab-btn ${cabResultTab === 'decision' ? 'active' : ''}`}
                         onClick={() => setCabResultTab('decision')}
                       >
-                        ⚖️ Decision
+                        🎯 Decision
                       </button>
+                      {keyConcernSections.length > 0 && (
+                        <button
+                          className={`cab-tab-btn ${cabResultTab === 'keyConcerns' ? 'active' : ''}`}
+                          onClick={() => setCabResultTab('keyConcerns')}
+                        >
+                          ⚠️ Key Concerns
+                        </button>
+                      )}
+                      {conditionSections.length > 0 && (
+                        <button
+                          className={`cab-tab-btn ${cabResultTab === 'conditions' ? 'active' : ''}`}
+                          onClick={() => setCabResultTab('conditions')}
+                        >
+                          🚧 Conditions/Blockers
+                        </button>
+                      )}
                       <button
                         className={`cab-tab-btn ${cabResultTab === 'flags' ? 'active' : ''}`}
                         onClick={() => setCabResultTab('flags')}
@@ -1385,9 +1530,23 @@ function App() {
                         </div>
                         <div className="decision-panel">
                           <DecisionBadge decision={decision} />
-                          <div className="decision-reasoning">
-                            <ReactMarkdown>{stripFlags(reasoning)}</ReactMarkdown>
-                          </div>
+                          <SectionList sections={decisionOnlySections} />
+                        </div>
+                      </div>
+                    )}
+
+                    {cabResultTab === 'keyConcerns' && (
+                      <div className="fade-in">
+                        <div className="decision-panel">
+                          <SectionList sections={keyConcernSections} />
+                        </div>
+                      </div>
+                    )}
+
+                    {cabResultTab === 'conditions' && (
+                      <div className="fade-in">
+                        <div className="decision-panel">
+                          <SectionList sections={conditionSections} />
                         </div>
                       </div>
                     )}
