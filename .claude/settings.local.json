@@ -24,7 +24,8 @@
       "Bash(node -e ' *)",
       "Bash(npm install *)",
       "Bash(python3 _bmad/scripts/resolve_customization.py --skill .claude/skills/bmad-agent-analyst --key agent)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Skill(claude-api)"
     ]
   }
 }

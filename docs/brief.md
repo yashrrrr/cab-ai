@@ -86,6 +86,18 @@ Risk assessed via deterministic lookup matrix (not LLM):
 
 ---
 
+### 3.4 Environment-Staged Predecessor Gate (Dev → QA → Production) — *New Capability, Not Traced to Source Document*
+
+**Rule**: Every RFC carries an `environment` value — **Dev**, **QA**, or **Production**. An RFC cannot be created in **QA** unless a predecessor RFC of the **same type** already exists in **Dev**, at status **Completed** (fully implemented and validated). The same rule applies one level up: an RFC cannot be created in **Production** unless a predecessor RFC of the same type exists in **QA**, at status **Completed**.
+
+**Exemption**: **Emergency** changes are exempt — no environment-predecessor is required at any environment value, consistent with their 24–48 hour urgency and retrospective-logging allowance *(Section 16.0)*.
+
+**Orthogonal to Type**: The `environment` field does not replace or alter `type`. Standard still auto-approves via SCC match (Section 3.1, 5.1); No Impact still requires 2-tier Coordinator + Manager sign-off (Section 5.2); Normal/Expedited still route to CAB. This adds a *precondition on when an RFC in a given environment can be created* — it is not a new approval body. "Dev CAB," "QA CAB," and "Production CAB" are shorthand for the same type-specific review happening on an RFC tagged with that environment, not new board memberships.
+
+**Non-Negotiable Scope Flag**: This capability does not trace to any section of the UST Change Management v6.1 source document. It is called out explicitly so it is signed off as a deliberate scope extension, not assumed to be ITIL-mandated (see Open Question 7).
+
+---
+
 ## 4. Standard Change Catalogue *(Section 17.0)* — New Epic
 
 A **Standard Change** is only valid if it matches an entry in the SCC with **Active** status. The SCC itself requires governance:
@@ -155,6 +167,18 @@ A **Standard Change** is only valid if it matches an entry in the SCC with **Act
 - Assert: Standard never reached `in_progress` without active SCC entry.
 - Assert: No Impact never reached `in_progress` without both coord + manager approval non-null and human actors.
 - Run on every commit; block deployment if any fail.
+
+### 5.4 Environment-Staged Predecessor Enforcement *(New Capability — see Section 3.4)*
+
+**Condition**: RFC `environment` = QA or Production, AND `type` != Emergency.
+
+**Action**: Block RFC creation unless `environment_predecessor_rfc_id` references an existing RFC where `type` matches, `environment` is one stage lower (Dev for QA; QA for Production), and `status` = **Completed**.
+
+**Architectural Constraint**: Because this check spans two rows (the new RFC and its predecessor), it cannot be expressed as a same-row CHECK constraint like Section 5.3's guardrails. Enforce via a BEFORE INSERT trigger (or equivalent data-access-layer service check) at the same layer as the other guardrails — never only in the API.
+
+**Data Requirements**:
+- `environment` (enum: Dev, QA, Production) — required on every RFC.
+- `environment_predecessor_rfc_id` (FK to ChangeRequest, nullable — required when `environment` in (QA, Production) and `type` != Emergency).
 
 ---
 
@@ -509,6 +533,13 @@ Track (and minimize) changes approved via grace period extensions at the highest
 - **Scope Decision**: Build minimal `client_managed` flag + placeholder for client PoC window approval, OR explicitly mark out-of-scope for v1.
 - *(See Open Question 2 below.)*
 
+### 13.12 Environment-Staged Predecessor Gate (Dev/QA/Production) *(New — Not Traced to Source Document)*
+- `environment` field on every RFC (Dev/QA/Production); Emergency exempt only from the predecessor-gate requirement below, not from carrying the field.
+- A QA-environment RFC requires a same-type, **Completed** predecessor RFC in Dev.
+- A Production-environment RFC requires a same-type, **Completed** predecessor RFC in QA.
+- Orthogonal to `type`: existing classification/approval mechanics per Section 3.1 unchanged.
+- Flagged for explicit PM sign-off since it has no ITIL source-doc basis (see Open Question 7).
+
 ---
 
 ## 14. Scope Exclusions (Explicit Out-of-Scope)
@@ -544,6 +575,10 @@ Track (and minimize) changes approved via grace period extensions at the highest
 - Role-gated approval: only user with "Change Manager" role can approve at Change Manager tier.
 - Only user with "Service Owner" role can approve grace periods < 30 days.
 - Enforced at DB constraint and API handler.
+
+### 15.6 Environment-Staged Predecessor Gate
+- No RFC (except Emergency) may be created with `environment` = QA or Production without a same-type predecessor RFC one environment stage lower, at status **Completed**.
+- Enforced at the data-access layer via trigger/service check, not only the API handler (see Section 5.4).
 
 ---
 
@@ -593,6 +628,16 @@ Track (and minimize) changes approved via grace period extensions at the highest
 
 **Confirmation Needed**: Should the system auto-flag or alert if exceptional approvals exceed a threshold, or is dashboard visibility sufficient?
 
+### **Open Question 7**: Environment-Staged Predecessor Gate — Scope Sign-Off & ITSM Feasibility
+**Source Gap**: This capability (Section 3.4) has no basis in the UST Change Management v6.1 source document — it was introduced during brief refinement as a phased Dev → QA → Production review requirement.
+
+**System Assumption**: Applies to Standard, No Impact, Normal, and Expedited; Emergency is exempt. Gate requires the predecessor RFC to reach **Completed** status (not merely approved) before the next-environment RFC can be created.
+
+**Confirmation Needed**:
+1. Is this scope extension approved for v1, or should it be deferred?
+2. Can the ITSM tool (ServiceNow/iSolve) support linking an RFC to a predecessor RFC by ID at creation time, or does this require new tooling outside the current ITSM abstraction?
+3. Should the predecessor requirement also imply the predecessor's PIR (if its type requires one) must be complete, or is **Completed** status on the RFC itself sufficient regardless of PIR outcome?
+
 ---
 
 ## 17. Data Model Skeleton (High-Level)
@@ -615,6 +660,8 @@ ChangeRequest
   - change_coordinator_id (FK User)
   - human_approver_id (FK User, NOT NULL for Normal/Expedited/Emergency in In Progress)
   - parent_change_request_id (FK ChangeRequest, nullable)
+  - environment (enum: Dev, QA, Production; required on all RFCs)
+  - environment_predecessor_rfc_id (FK ChangeRequest, nullable; required when environment in (QA, Production) and type != Emergency)
   - validity_date (calendar days per type)
   - validity_extension_date (nullable)
   - grace_period_approver_id (FK User, nullable)
@@ -750,6 +797,18 @@ ALTER TABLE ChangeRequest
     ))
   );
 
+-- Environment-staged predecessor gate (cross-row; not expressible as a
+-- same-table CHECK -- must join to the predecessor row's type + status)
+CREATE TRIGGER trg_environment_predecessor_gate
+BEFORE INSERT ON ChangeRequest
+FOR EACH ROW
+WHEN (NEW.type != 'Emergency' AND NEW.environment IN ('QA', 'Production'))
+BEGIN
+  -- Reject unless environment_predecessor_rfc_id references a ChangeRequest
+  -- row with matching type, environment one stage lower (Dev for QA;
+  -- QA for Production), and status = 'Completed'.
+END;
+
 -- Audit log is immutable
 ALTER TABLE AuditLogEntry
   ADD CONSTRAINT no_update_audit
@@ -775,6 +834,8 @@ Run continuously; blocks deployment on failure.
 6. Assert: Validity enforcement (no tasks created after expiry unless grace granted).
 7. Assert: PIR cascade (Day 7, 9, 12, 16, 22, 29, 30 notifications and auto-cancel).
 8. Assert: Non-compliance initiation on validity expiry + 10 days.
+9. Assert: No QA/Production RFC (type != Emergency) reaches creation without a same-type, **Completed** predecessor RFC one environment stage lower.
+10. Assert: Emergency RFCs bypass the environment-predecessor gate at every environment value.
 
 ### 18.2 Integration Tests
 

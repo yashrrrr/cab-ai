@@ -5,6 +5,122 @@ Database initialization and connection management for RFC PoC
 import sqlite3
 import os
 
+# Canonical environment values (brief 17.1) — kept as a Python constant here
+# purely for the f-string below; guardrails.py's PREDECESSOR_ENVIRONMENT
+# encodes the *same* one-stage-lower mapping independently in Python for the
+# API pre-check. These are two hand-synchronized copies of one small rule
+# (SQL here, Python there) — if a fourth environment tier is ever added,
+# both need updating; there's no single shared source of truth across
+# languages.
+_ENVIRONMENT_VALUES = ("Dev", "QA", "Production")
+
+
+def _gate_trigger_body(new_row: str) -> str:
+    """
+    Shared trigger body (as a SQL fragment) for the Environment-Staged
+    Predecessor Gate, parameterized only by which correlation name the
+    calling trigger uses for the row being written (`NEW` for both INSERT
+    and UPDATE triggers in SQLite).
+    """
+    return f"""
+            SELECT RAISE(ABORT, 'environment_predecessor_gate: environment=QA/Production RFCs (except Emergency) require a Completed same-type predecessor RFC one environment stage lower')
+            WHERE {new_row}.environment_predecessor_rfc_id IS NULL
+               OR NOT EXISTS (
+                   SELECT 1 FROM change_requests p
+                   WHERE p.id = {new_row}.environment_predecessor_rfc_id
+                     AND p.change_type = {new_row}.change_type
+                     AND p.status = 'Completed'
+                     AND p.environment = (CASE {new_row}.environment WHEN 'QA' THEN 'Dev' WHEN 'Production' THEN 'QA' END)
+               );
+    """
+
+
+def _create_environment_predecessor_gate_trigger(cursor):
+    """
+    Environment-Staged Predecessor Gate (brief section 3.4 / 5.4 / 17.2).
+
+    A same-table CHECK constraint can't express this rule — it has to join
+    the row being written to a *different* row (the predecessor). SQLite
+    triggers can run subqueries in a BEFORE INSERT/UPDATE ... WHEN ...
+    BEGIN block, so this is enforced here rather than only in the API
+    layer: any INSERT *or UPDATE* on change_requests goes through this,
+    regardless of which code path (main.py, a future script, a bulk
+    import, etc.) performs it.
+
+    Rule: for every RFC except type='Emergency', if environment is 'QA' or
+    'Production', environment_predecessor_rfc_id must reference an existing
+    change_requests row with the same change_type, status='Completed', and
+    environment one stage lower (Dev for QA; QA for Production). Emergency
+    RFCs are exempt from this check at every environment value (they still
+    carry the environment column, just never require a predecessor).
+
+    Two triggers are created (INSERT and UPDATE) so the rule also holds if
+    a row's environment/predecessor is changed after creation — an INSERT
+    only guard would leave the gate silently bypassable via UPDATE, since
+    this table has no separate "create" vs "edit" code path today, and may
+    grow one.
+    """
+    cursor.execute("DROP TRIGGER IF EXISTS trg_environment_predecessor_gate")
+    cursor.execute(f"""
+        CREATE TRIGGER trg_environment_predecessor_gate
+        BEFORE INSERT ON change_requests
+        FOR EACH ROW
+        WHEN NEW.change_type != 'Emergency' AND NEW.environment IN ('QA', 'Production')
+        BEGIN
+        {_gate_trigger_body('NEW')}
+        END;
+    """)
+
+    cursor.execute("DROP TRIGGER IF EXISTS trg_environment_predecessor_gate_on_update")
+    cursor.execute(f"""
+        CREATE TRIGGER trg_environment_predecessor_gate_on_update
+        BEFORE UPDATE OF environment, environment_predecessor_rfc_id, change_type ON change_requests
+        FOR EACH ROW
+        WHEN NEW.change_type != 'Emergency' AND NEW.environment IN ('QA', 'Production')
+        BEGIN
+        {_gate_trigger_body('NEW')}
+        END;
+    """)
+
+
+def _create_environment_domain_check_trigger(cursor):
+    """
+    Belt-and-suspenders guard alongside the gate above: without this, a
+    direct INSERT/UPDATE using a non-canonical environment spelling (e.g.
+    'qa', 'Prod', 'Staging') would silently skip the gate trigger's WHEN
+    clause entirely (it only matches the exact strings 'QA'/'Production'),
+    since SQLite has no native enum type and ALTER TABLE can't retrofit a
+    CHECK constraint onto an already-existing table/column.
+    """
+    cursor.execute("DROP TRIGGER IF EXISTS trg_environment_domain_check")
+    cursor.execute("""
+        CREATE TRIGGER trg_environment_domain_check
+        BEFORE INSERT ON change_requests
+        FOR EACH ROW
+        WHEN NEW.environment NOT IN ('Dev', 'QA', 'Production')
+        BEGIN
+            SELECT RAISE(ABORT, 'environment must be one of Dev, QA, Production');
+        END;
+    """)
+
+    cursor.execute("DROP TRIGGER IF EXISTS trg_environment_domain_check_on_update")
+    cursor.execute("""
+        CREATE TRIGGER trg_environment_domain_check_on_update
+        BEFORE UPDATE OF environment ON change_requests
+        FOR EACH ROW
+        WHEN NEW.environment NOT IN ('Dev', 'QA', 'Production')
+        BEGIN
+            SELECT RAISE(ABORT, 'environment must be one of Dev, QA, Production');
+        END;
+    """)
+
+
+def _create_environment_triggers(cursor):
+    """Create/refresh all Environment-Staged Predecessor Gate triggers."""
+    _create_environment_domain_check_trigger(cursor)
+    _create_environment_predecessor_gate_trigger(cursor)
+
+
 def init_db(db_path: str = "rfc_poc.db"):
     """Initialize SQLite database with schema"""
 
@@ -37,9 +153,15 @@ def init_db(db_path: str = "rfc_poc.db"):
             cab_flags TEXT,
             document_filename TEXT,
             document_path TEXT,
-            document_text TEXT
+            document_text TEXT,
+            environment TEXT NOT NULL DEFAULT 'Dev',
+            environment_predecessor_rfc_id TEXT,
+            completed_at TEXT,
+            FOREIGN KEY(environment_predecessor_rfc_id) REFERENCES change_requests(id)
         )
     """)
+
+    _create_environment_triggers(cursor)
 
     # Create CAB decisions table
     cursor.execute("""
@@ -111,6 +233,41 @@ def migrate_db(db_path: str = "rfc_poc.db"):
                 except sqlite3.OperationalError:
                     # Another process added it concurrently ("duplicate column name") — safe to ignore
                     pass
+
+        # Environment-Staged Predecessor Gate columns (brief section 17.1).
+        # environment defaults existing rows to 'Dev', which never requires a
+        # predecessor, so pre-existing data stays valid under the new gate.
+        if "environment" not in existing_columns:
+            try:
+                cursor.execute("ALTER TABLE change_requests ADD COLUMN environment TEXT NOT NULL DEFAULT 'Dev'")
+                print("[OK] Migration: added environment column")
+            except sqlite3.OperationalError:
+                pass
+
+        if "environment_predecessor_rfc_id" not in existing_columns:
+            try:
+                cursor.execute("ALTER TABLE change_requests ADD COLUMN environment_predecessor_rfc_id TEXT")
+                print("[OK] Migration: added environment_predecessor_rfc_id column")
+            except sqlite3.OperationalError:
+                pass
+
+        if "completed_at" not in existing_columns:
+            try:
+                cursor.execute("ALTER TABLE change_requests ADD COLUMN completed_at TEXT")
+                print("[OK] Migration: added completed_at column")
+            except sqlite3.OperationalError:
+                pass
+
+        # Re-create the gate/domain-check triggers every run — cheap, and
+        # keeps them in sync if the rule definition ever changes (DROP+
+        # CREATE, not IF NOT EXISTS). Note: the FOREIGN KEY on
+        # environment_predecessor_rfc_id and the NOT NULL DEFAULT on
+        # environment only land in fresh databases via init_db()'s CREATE
+        # TABLE — SQLite can't ALTER TABLE to add either onto an
+        # already-existing table/column, so upgraded databases rely on
+        # these triggers (not the FK) for enforcement. That asymmetry is a
+        # known limitation, not an oversight.
+        _create_environment_triggers(cursor)
 
         conn.commit()
     finally:

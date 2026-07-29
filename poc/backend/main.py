@@ -19,6 +19,7 @@ from cab_orchestrator import run_ai_cab_session
 from classification import classify_rfc, evaluate_no_impact, match_scc
 from db_init import init_db, migrate_db, get_db_connection
 from document_extraction import extract_pdf_text, extract_rfc_fields
+from guardrails import environment_predecessor_gate_error
 
 # Supporting-document uploads: PDFs land in uploads/tmp/{token}.pdf until the
 # RFC they're paired with is created, then move to uploads/{rfc_id}/.
@@ -67,6 +68,12 @@ class PriorityEnum(str, Enum):
     MODERATE = "Moderate"
     LOW = "Low"
 
+class EnvironmentEnum(str, Enum):
+    """Brief section 3.4/17.1 — every RFC carries one of these."""
+    DEV = "Dev"
+    QA = "QA"
+    PRODUCTION = "Production"
+
 class RFCSubmissionRequest(BaseModel):
     title: str
     description: str
@@ -80,6 +87,11 @@ class RFCSubmissionRequest(BaseModel):
     requestor_name: str
     document_token: Optional[str] = None  # from POST /rfc/upload-document, pairs the uploaded PDF with this RFC
     document_filename: Optional[str] = None  # original filename, echoed back from the upload response
+    # Environment-Staged Predecessor Gate (brief 3.4/5.4/17.1). Every RFC
+    # carries an environment; defaults to Dev (the one tier that never needs
+    # a predecessor) so existing callers that omit it stay unaffected.
+    environment: Optional[EnvironmentEnum] = EnvironmentEnum.DEV
+    environment_predecessor_rfc_id: Optional[str] = None  # required by the gate when environment is QA/Production and type != Emergency
 
 class RFCResponse(BaseModel):
     id: str
@@ -104,6 +116,9 @@ class RFCResponse(BaseModel):
     back_out_plan: Optional[str] = None
     cab_flags: Optional[List[dict]] = None
     document_filename: Optional[str] = None
+    environment: EnvironmentEnum = EnvironmentEnum.DEV
+    environment_predecessor_rfc_id: Optional[str] = None
+    completed_at: Optional[str] = None
 
 class CABSessionRequest(BaseModel):
     rfc_id: str
@@ -235,27 +250,57 @@ async def submit_rfc(req: RFCSubmissionRequest):
         # A missing/expired temp file (e.g. stale token) is not an error —
         # the RFC is simply submitted without a paired document.
 
+    environment = (req.environment or EnvironmentEnum.DEV).value
+
     # Persist to DB
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO change_requests (
-            id, rfc_number, title, description, change_type, impact, priority,
-            risk_level, status, auto_approved, created_at, requestor_name,
-            affected_systems, implementation_plan, test_cases, back_out_plan,
-            business_justification, estimated_downtime_hours,
-            document_filename, document_path, document_text
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        rfc_id, rfc_number, req.title, req.description, req.change_type.value,
-        impact.value, priority.value, risk_level, status, auto_approved,
-        datetime.now().isoformat(), req.requestor_name,
-        json.dumps(req.affected_systems), req.implementation_plan,
-        req.test_cases, req.back_out_plan, req.business_justification,
-        req.estimated_downtime_hours,
-        document_filename, document_path, document_text
-    ))
-    conn.commit()
+
+    # Environment-Staged Predecessor Gate (brief 3.4/5.4/13.12/15.6) — checked
+    # against the *final* classified change_type (after auto-classification
+    # and any No-Impact-to-Normal escalation above), since that's what the
+    # DB trigger below will also check at INSERT time. This pre-check exists
+    # only to return a clean 400 with a specific reason; the trigger is the
+    # real, non-bypassable backstop — see guardrails.py and db_init.py.
+    gate_error = environment_predecessor_gate_error(
+        cursor, environment, req.change_type.value, req.environment_predecessor_rfc_id
+    )
+    if gate_error:
+        conn.close()
+        raise HTTPException(status_code=400, detail=gate_error)
+
+    try:
+        cursor.execute("""
+            INSERT INTO change_requests (
+                id, rfc_number, title, description, change_type, impact, priority,
+                risk_level, status, auto_approved, created_at, requestor_name,
+                affected_systems, implementation_plan, test_cases, back_out_plan,
+                business_justification, estimated_downtime_hours,
+                document_filename, document_path, document_text,
+                environment, environment_predecessor_rfc_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            rfc_id, rfc_number, req.title, req.description, req.change_type.value,
+            impact.value, priority.value, risk_level, status, auto_approved,
+            datetime.now().isoformat(), req.requestor_name,
+            json.dumps(req.affected_systems), req.implementation_plan,
+            req.test_cases, req.back_out_plan, req.business_justification,
+            req.estimated_downtime_hours,
+            document_filename, document_path, document_text,
+            environment, req.environment_predecessor_rfc_id
+        ))
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        # Backstop: trg_environment_predecessor_gate rejected the insert even
+        # though the pre-check above passed (e.g. the predecessor was
+        # concurrently un-completed between the check and the insert). Any
+        # other IntegrityError (e.g. a rfc_number collision) is unrelated to
+        # this guardrail and should surface as before this feature existed.
+        if "environment_predecessor_gate" in str(e):
+            raise HTTPException(status_code=400, detail=f"Rejected by database guardrail: {e}")
+        raise
+    finally:
+        conn.close()
 
     created_at = datetime.now().isoformat()
     return RFCResponse(
@@ -279,7 +324,9 @@ async def submit_rfc(req: RFCSubmissionRequest):
         implementation_plan=req.implementation_plan,
         test_cases=req.test_cases,
         back_out_plan=req.back_out_plan,
-        document_filename=document_filename
+        document_filename=document_filename,
+        environment=EnvironmentEnum(environment),
+        environment_predecessor_rfc_id=req.environment_predecessor_rfc_id
     )
 
 @app.get("/rfc/{rfc_id}", response_model=RFCResponse)
@@ -333,8 +380,62 @@ async def get_rfc(rfc_id: str):
         business_justification=row[18],
         estimated_downtime_hours=row[19],
         cab_flags=cab_flags,
-        document_filename=row["document_filename"]
+        document_filename=row["document_filename"],
+        environment=EnvironmentEnum(row["environment"] or "Dev"),
+        environment_predecessor_rfc_id=row["environment_predecessor_rfc_id"],
+        completed_at=row["completed_at"]
     )
+
+@app.post("/rfc/{rfc_id}/complete")
+async def complete_rfc(rfc_id: str, actor: str = "system"):
+    """
+    Mark an RFC 'Completed'.
+
+    The brief's Environment-Staged Predecessor Gate (3.4/5.4) requires a
+    predecessor RFC to reach status='Completed' before a same-type RFC can
+    be created one environment stage up — but nothing in this POC's existing
+    lifecycle (Submitted -> Auto-Approved/CAB Reviewed/Escalated) ever
+    reaches Completed. This minimal endpoint is what makes the predecessor
+    chain reachable/demonstrable; it intentionally does not re-implement the
+    full ITIL Implement/Close lifecycle, which is out of scope here.
+
+    Guard: an RFC the CAB explicitly rejected cannot be marked Completed —
+    "Completed" is meant to mean the change actually happened, not just
+    that someone clicked the button, and a rejected change was never
+    implemented. This does NOT re-implement Section 5.3's full guardrail
+    suite (out of scope) — it only closes the one gap directly relevant to
+    this gate's integrity: a rejected predecessor should never be able to
+    unlock a same-type RFC one environment stage up.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, status, cab_decision FROM change_requests WHERE id = ?", (rfc_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="RFC not found")
+
+    if row["cab_decision"] == "Rejected":
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail="This RFC was rejected by CAB and cannot be marked Completed.",
+        )
+
+    completed_at = datetime.now().isoformat()
+    cursor.execute(
+        "UPDATE change_requests SET status = 'Completed', completed_at = ? WHERE id = ?",
+        (completed_at, rfc_id),
+    )
+    cursor.execute(
+        "INSERT INTO audit_log (id, rfc_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), rfc_id, "completed", actor, completed_at,
+         "Marked Completed — eligible to serve as an environment-predecessor for a same-type RFC one stage up."),
+    )
+    conn.commit()
+    conn.close()
+
+    return {"rfc_id": rfc_id, "status": "Completed", "completed_at": completed_at}
 
 @app.post("/rfc/{rfc_id}/trigger-cab")
 async def trigger_cab_review(rfc_id: str):
@@ -408,7 +509,7 @@ async def list_rfcs():
     """List all RFCs"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, rfc_number, title, change_type, status, created_at FROM change_requests ORDER BY created_at DESC")
+    cursor.execute("SELECT id, rfc_number, title, change_type, status, created_at, environment FROM change_requests ORDER BY created_at DESC")
     rows = cursor.fetchall()
     conn.close()
 
@@ -420,7 +521,8 @@ async def list_rfcs():
                 "title": row[2],
                 "change_type": row[3],
                 "status": row[4],
-                "created_at": row[5]
+                "created_at": row[5],
+                "environment": row[6]
             }
             for row in rows
         ]

@@ -379,6 +379,15 @@ function App() {
     affected_systems: '',
     estimated_downtime_hours: 0,
     requestor_name: '',
+    // Environment-Staged Predecessor Gate: every RFC carries an environment;
+    // QA/Production (except Emergency) also need a same-type, Completed
+    // predecessor RFC one environment stage lower. change_type isn't
+    // user-selected in this form (it's auto-classified server-side), so the
+    // predecessor field can't be marked HTML-`required` here — an
+    // Emergency-classified submission legitimately needs none, and the
+    // backend is the authority on whether one was actually required.
+    environment: 'Dev',
+    environment_predecessor_rfc_id: '',
   });
 
   // Supporting document (PDF) uploaded ahead of submission, paired with the
@@ -423,7 +432,16 @@ function App() {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+    setFormData((prev) => {
+      // Changing environment invalidates any previously chosen predecessor
+      // (it was a candidate for a different tier) — clear it rather than
+      // silently submitting a stale cross-tier id that's guaranteed to be
+      // rejected.
+      if (name === 'environment' && value !== prev.environment) {
+        return { ...prev, environment: value, environment_predecessor_rfc_id: '' };
+      }
+      return { ...prev, [name]: value };
+    });
   };
 
   const handleDocumentUpload = async (e) => {
@@ -482,6 +500,9 @@ function App() {
         estimated_downtime_hours: parseFloat(formData.estimated_downtime_hours),
         document_token: uploadedDoc?.token || null,
         document_filename: uploadedDoc?.filename || null,
+        // Dev never needs a predecessor — send null rather than '' so the
+        // backend's Optional[str] field stays clean either way.
+        environment_predecessor_rfc_id: formData.environment_predecessor_rfc_id || null,
       };
 
       const response = await axios.post(`${API_BASE}/rfc/submit`, payload);
@@ -496,6 +517,8 @@ function App() {
         affected_systems: '',
         estimated_downtime_hours: 0,
         requestor_name: '',
+        environment: 'Dev',
+        environment_predecessor_rfc_id: '',
       });
       setUploadedDoc(null);
       setActiveTab('list');
@@ -516,6 +539,21 @@ function App() {
       setCabResultTab(response.data.cab_decision ? 'decision' : 'deliberation');
     } catch (error) {
       showToast('Unable to load RFC details.', 'error');
+    }
+  };
+
+  const handleMarkCompleted = async (rfc_id) => {
+    setLoading(true);
+    try {
+      await axios.post(`${API_BASE}/rfc/${rfc_id}/complete`);
+      showToast('RFC marked Completed — it can now serve as an environment-predecessor.', 'success');
+      const response = await axios.get(`${API_BASE}/rfc/${rfc_id}`);
+      setSelectedRfc(response.data);
+      fetchRfcList();
+    } catch (error) {
+      showToast(error.response?.data?.detail || 'Failed to mark RFC as Completed.', 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -878,6 +916,9 @@ function App() {
                       <span className="badge status-generic">
                         {STATUS_ICONS[rfc.status] || ''} {rfc.status}
                       </span>
+                      {rfc.environment && (
+                        <span className="badge status-generic">{rfc.environment}</span>
+                      )}
                     </div>
                     <p className="rfc-date">{timeAgo(rfc.created_at)}</p>
                   </div>
@@ -971,6 +1012,54 @@ function App() {
                   required
                   placeholder="e.g., Database, API Gateway, Mobile App"
                 />
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Environment *</label>
+                  <select
+                    name="environment"
+                    value={formData.environment}
+                    onChange={handleInputChange}
+                  >
+                    <option value="Dev">Dev</option>
+                    <option value="QA">QA</option>
+                    <option value="Production">Production</option>
+                  </select>
+                </div>
+
+                {formData.environment !== 'Dev' && (
+                  <div className="form-group">
+                    <label>
+                      Predecessor RFC ({formData.environment === 'QA' ? 'Dev' : 'QA'})
+                    </label>
+                    <select
+                      name="environment_predecessor_rfc_id"
+                      value={formData.environment_predecessor_rfc_id}
+                      onChange={handleInputChange}
+                    >
+                      <option value="">-- Select a Completed predecessor RFC --</option>
+                      {rfcs
+                        .filter(
+                          (r) =>
+                            r.environment === (formData.environment === 'QA' ? 'Dev' : 'QA') &&
+                            r.status === 'Completed'
+                        )
+                        .map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.rfc_number} — {r.title} ({r.change_type})
+                          </option>
+                        ))}
+                    </select>
+                    <p className="form-subtitle">
+                      Environment-Staged Predecessor Gate: unless this turns out to classify as
+                      Emergency, this RFC will be rejected on submit without a Completed predecessor
+                      of the same type in {formData.environment === 'QA' ? 'Dev' : 'QA'}. Not marked
+                      required here because change type is only known after classification — leave
+                      blank if you expect this to be an Emergency change.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="form-row">
@@ -1083,7 +1172,27 @@ function App() {
               <div className="meta-item">
                 <strong>Status</strong>
                 <span className="badge status-generic">{selectedRfc.status}</span>
+                {selectedRfc.status !== 'Completed' && (
+                  <button
+                    type="button"
+                    className="btn-back"
+                    onClick={() => handleMarkCompleted(selectedRfc.id)}
+                    disabled={loading}
+                    title="Mark this RFC Completed — required before it can serve as an Environment-Staged Predecessor Gate predecessor for a same-type RFC one environment stage up"
+                  >
+                    Mark Completed
+                  </button>
+                )}
               </div>
+              <div className="meta-item">
+                <strong>Environment</strong>
+                <span className="badge status-generic">{selectedRfc.environment || 'Dev'}</span>
+              </div>
+              {selectedRfc.environment_predecessor_rfc_id && (
+                <div className="meta-item">
+                  <strong>Predecessor RFC</strong> {selectedRfc.environment_predecessor_rfc_id}
+                </div>
+              )}
               <div className="meta-item">
                 <strong>Impact</strong> {selectedRfc.impact}
               </div>
