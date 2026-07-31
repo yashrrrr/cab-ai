@@ -1,0 +1,19 @@
+{
+  "architecture_review": ["TODO(criteria): approver not explicit in source table for Module 1 item 1 — verify"],
+  "cloud_budget_approval": ["Shinu Arjunan", "Vijaykumar Mahadevan", "Rowlins (AD/Zscaler-related changes only)", "Account Manager", "Business Finance Team"],
+  "aup_review": ["Account Manager / Relevant Approver"],
+  "data_privacy": ["Data Privacy Team"],
+  "internal_integration": ["Respective Service Owners"],
+  "client_integration": ["Client Account Manager", "Client Partner", "Relevant Client Stakeholders"],
+  "vendor_involvement": ["Ramya (Delivery Leadership)", "Ranjith (Delivery Leadership)"],
+  "supporting_docs_infra": ["Relevant Architecture Reviewers"],
+  "architecture_review_app": ["Shinu Arjunan"],
+  "ai_architecture": ["AI Architecture Team"],
+  "security_validation": ["Security Team"],
+  "testing_validation": ["Testing / Business Sign-Off Team"],
+  "vendor_involvement_app": ["Relevant Vendor / Delivery Team"],
+  "security_assessment": ["ISMS / Security Team"],
+  "business_design_docs": ["Project Team"],
+  "integration_approval_app": ["Respective Service Owners"],
+  "cloud_subscription_hosting": ["Cloud Subscription Owner"]
+}

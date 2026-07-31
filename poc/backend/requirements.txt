@@ -1,0 +1,15 @@
+# FastAPI Backend Dependencies for RFC Lifecycle PoC
+
+# Web Framework
+fastapi
+uvicorn[standard]
+pydantic
+
+# Document Processing
+pypdf           # PDF text extraction
+python-docx     # Word (.docx) text extraction
+python-pptx     # PowerPoint (.pptx) text extraction
+openpyxl        # Excel (.xlsx) text extraction
+
+# AI / LLM
+openai          # For GitHub Models / OpenAI API

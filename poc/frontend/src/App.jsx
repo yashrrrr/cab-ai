@@ -9,7 +9,7 @@ import {
   downloadRegisterPdf,
 } from './pdfExport';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://localhost:8002';
 
 // Matches the --accent CSS variable in App.css. Chart bars are drawn with an
 // inline style (not a CSS class), so this is the one JS-side color constant
@@ -25,6 +25,17 @@ const ALLOWED_DOC_ACCEPT =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document,' +
   'application/vnd.openxmlformats-officedocument.presentationml.presentation,' +
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+// CAB Readiness checklist evidence categories — matches the free-text
+// `category` column on rfc_documents (poc/backend/db_init.py).
+const DOCUMENT_CATEGORIES = [
+  { value: 'other', label: 'Other' },
+  { value: 'architecture_diagram', label: 'Architecture Diagram' },
+  { value: 'dpia', label: 'DPIA (Data Privacy Impact Assessment)' },
+  { value: 'vapt_report', label: 'VAPT Report' },
+  { value: 'test_signoff', label: 'Test Sign-off' },
+  { value: 'brd_frd', label: 'BRD / FRD' },
+];
 
 const STATUS_ICONS = {
   'Submitted': '⏳',
@@ -267,6 +278,133 @@ function DecisionBadge({ decision }) {
   );
 }
 
+// CAB Readiness Agent (checklist/scoring feature) — distinct from the CAB
+// deliberation feature above (DecisionBadge/FlagsPanel/agent transcript).
+// This renders the /api/cab/evaluate output contract.
+const READINESS_STATUS_META = {
+  ready: { color: '#15803d', bg: '#dcfce7', icon: '✓', label: 'Ready' },
+  conditional: { color: '#b45309', bg: '#fef3c7', icon: '△', label: 'Conditional' },
+  not_ready: { color: '#b91c1c', bg: '#fee2e2', icon: '✕', label: 'Not Ready' },
+};
+
+const AREA_STATUS_META = {
+  complete: { color: '#15803d', bg: '#dcfce7', label: 'Complete' },
+  partial: { color: '#b45309', bg: '#fef3c7', label: 'Partial' },
+  missing: { color: '#b91c1c', bg: '#fee2e2', label: 'Missing' },
+  not_applicable: { color: '#475569', bg: '#f1f5f9', label: 'N/A' },
+};
+
+const MODULE_LABELS = {
+  'module-3-form-validation': 'Form Validation',
+  'module-1-infra': 'Infrastructure Review',
+  'module-2-application': 'Application Review',
+};
+
+function ReadinessStatusBadge({ status }) {
+  const meta = READINESS_STATUS_META[status] || READINESS_STATUS_META['not_ready'];
+  return (
+    <span className="decision-badge" style={{ color: meta.color, background: meta.bg }}>
+      <span className="decision-badge-icon">{meta.icon}</span> {meta.label}
+    </span>
+  );
+}
+
+function CabReadinessPanel({ result, activeModuleTab, onSelectModuleTab }) {
+  const modules = result.modules || [];
+  const activeModule = modules[activeModuleTab] || modules[0];
+
+  return (
+    <div className="cab-session">
+      <div className="readiness-header">
+        <div className="readiness-score" title={result.scoringDisclaimer}>
+          {result.overallScore}%
+        </div>
+        <ReadinessStatusBadge status={result.overallStatus} />
+        <span className="badge status-generic">
+          CR Type: {result.crType} ({result.crTypeSource})
+        </span>
+      </div>
+      <p className="form-subtitle">{result.scoringDisclaimer}</p>
+
+      <div className="cab-tabs">
+        <div className="cab-tabs-group">
+          {modules.map((m, idx) => (
+            <button
+              key={m.module}
+              className={`cab-tab-btn ${activeModuleTab === idx ? 'active' : ''}`}
+              onClick={() => onSelectModuleTab(idx)}
+            >
+              {MODULE_LABELS[m.module] || m.module}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {activeModule && (
+        <div className="cab-tab-panel fade-in">
+          <div className="readiness-area-list">
+            {activeModule.areas.map((area) => {
+              const meta = AREA_STATUS_META[area.status] || AREA_STATUS_META['missing'];
+              return (
+                <div key={area.id} className="readiness-area-item">
+                  <div className="flag-head">
+                    <span
+                      className="sev-badge"
+                      style={{ color: meta.color, background: meta.bg }}
+                    >
+                      {meta.label}
+                    </span>
+                    <span className="flag-element">{area.name}</span>
+                    {area.verifyFlag && <span className="badge status-generic">[VERIFY]</span>}
+                  </div>
+                  {area.requiredApprovers?.length > 0 && (
+                    <p className="flag-raised-by">
+                      Required approvers: {area.requiredApprovers.join(', ')}
+                    </p>
+                  )}
+                  {area.notes && <p className="flag-rec">{area.notes}</p>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {(result.missingMandatoryItems?.length > 0 || result.pendingApprovers?.length > 0) && (
+        <div className="decision-panel" style={{ marginTop: 16 }}>
+          <h4>What&rsquo;s Missing</h4>
+          {result.missingMandatoryItems.map((item, idx) => (
+            <p key={idx} className="flag-rec">
+              {MODULE_LABELS[item.module] || item.module} — {item.area}
+              {item.requiredApprovers?.length > 0 && ` (${item.requiredApprovers.join(', ')})`}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {result.piiFlags?.length > 0 && (
+        <div className="decision-panel alert alert-success" style={{ marginTop: 16, background: 'var(--status-warning-bg)', color: 'var(--status-warning-text)' }}>
+          <h4>PII / PHI Indicators</h4>
+          {result.piiFlags.map((flag, idx) => (
+            <p key={idx} className="flag-rec">
+              {flag.area}: {flag.flag} ({flag.documentRef})
+            </p>
+          ))}
+        </div>
+      )}
+
+      {result.openVerificationItems?.length > 0 && (
+        <div className="decision-panel" style={{ marginTop: 16 }}>
+          <h4>Open Verification Items</h4>
+          {result.openVerificationItems.map((item, idx) => (
+            <p key={idx} className="flag-rec">{item}</p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // The Chair's synthesis uses **Label:** as an inline bold marker for each
 // section (not real markdown headers), so plain ReactMarkdown renders every
 // section as visually-identical gray text. Recognize the known labels and
@@ -452,6 +590,9 @@ function App() {
   const [listLoading, setListLoading] = useState(true);
   const [selectedRfc, setSelectedRfc] = useState(null);
   const [cabSession, setCabSession] = useState(null);
+  const [cabReadiness, setCabReadiness] = useState(null);
+  const [cabReadinessLoading, setCabReadinessLoading] = useState(false);
+  const [cabReadinessModuleTab, setCabReadinessModuleTab] = useState(0);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -474,21 +615,18 @@ function App() {
     affected_systems: '',
     estimated_downtime_hours: 0,
     requestor_name: '',
-    // Environment-Staged Predecessor Gate: every RFC carries an environment;
-    // QA/Production (except Emergency) also need a same-type, Completed
-    // predecessor RFC one environment stage lower. change_type isn't
-    // user-selected in this form (it's auto-classified server-side), so the
-    // predecessor field can't be marked HTML-`required` here — an
-    // Emergency-classified submission legitimately needs none, and the
-    // backend is the authority on whether one was actually required.
-    environment: 'Dev',
+    // Environment-Staged Predecessor Gate DISABLED
+    // All RFCs default to Production now
+    environment: 'Production',
     environment_predecessor_rfc_id: '',
   });
 
-  // Supporting document (PDF) uploaded ahead of submission, paired with the
-  // RFC once created. null until a file is successfully uploaded/parsed.
-  const [uploadedDoc, setUploadedDoc] = useState(null); // { token, filename }
+  // Supporting documents uploaded ahead of submission, paired with the RFC
+  // once created. Each entry: { token, filename, category }.
+  const [uploadedDocs, setUploadedDocs] = useState([]);
   const [docParsing, setDocParsing] = useState(false);
+  // Explicit CR type — routes which CAB Readiness checklist module(s) apply.
+  const [crType, setCrType] = useState('');
 
   useEffect(() => {
     fetchRfcList();
@@ -527,29 +665,20 @@ function App() {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => {
-      // Changing environment invalidates any previously chosen predecessor
-      // (it was a candidate for a different tier) — clear it rather than
-      // silently submitting a stale cross-tier id that's guaranteed to be
-      // rejected.
-      if (name === 'environment' && value !== prev.environment) {
-        return { ...prev, environment: value, environment_predecessor_rfc_id: '' };
-      }
-      return { ...prev, [name]: value };
-    });
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleDocumentUpload = async (e) => {
-    const file = e.target.files[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = ''; // allow re-selecting the same file later (e.g. after Remove)
-    if (!file) return;
+    if (files.length === 0) return;
 
-    const hasAllowedExtension = ALLOWED_DOC_EXTENSIONS.some((ext) =>
-      file.name.toLowerCase().endsWith(ext)
+    const badFile = files.find(
+      (file) => !ALLOWED_DOC_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))
     );
-    if (!hasAllowedExtension) {
+    if (badFile) {
       showToast(
-        'Unsupported file type. Please upload a PDF, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) document.',
+        'Unsupported file type. Please upload PDF, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) documents.',
         'error'
       );
       return;
@@ -557,26 +686,28 @@ function App() {
 
     setDocParsing(true);
     try {
-      const body = new FormData();
-      body.append('file', file);
-      const response = await axios.post(`${API_BASE}/rfc/upload-document`, body, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const { document_token, filename, extracted_fields } = response.data;
-      setUploadedDoc({ token: document_token, filename });
+      for (const file of files) {
+        const body = new FormData();
+        body.append('file', file);
+        const response = await axios.post(`${API_BASE}/rfc/upload-document`, body, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        const { document_token, filename, extracted_fields } = response.data;
+        setUploadedDocs((prev) => [...prev, { token: document_token, filename, category: 'other' }]);
 
-      const hasFields = extracted_fields && Object.keys(extracted_fields).length > 0;
-      if (hasFields) {
-        setFormData((prev) => ({
-          ...prev,
-          ...extracted_fields,
-          ...(extracted_fields.affected_systems && {
-            affected_systems: extracted_fields.affected_systems.join(', '),
-          }),
-        }));
-        showToast(`Parsed ${filename} — review the pre-filled fields below.`, 'success');
-      } else {
-        showToast(`${filename} attached — couldn't auto-detect fields, please fill in manually.`, 'success');
+        const hasFields = extracted_fields && Object.keys(extracted_fields).length > 0;
+        if (hasFields) {
+          setFormData((prev) => ({
+            ...prev,
+            ...extracted_fields,
+            ...(extracted_fields.affected_systems && {
+              affected_systems: extracted_fields.affected_systems.join(', '),
+            }),
+          }));
+          showToast(`Parsed ${filename} — review the pre-filled fields below.`, 'success');
+        } else {
+          showToast(`${filename} attached — couldn't auto-detect fields, please fill in manually.`, 'success');
+        }
       }
     } catch (error) {
       showToast(error.response?.data?.detail || 'Failed to parse document.', 'error');
@@ -585,7 +716,11 @@ function App() {
     }
   };
 
-  const handleRemoveDocument = () => setUploadedDoc(null);
+  const handleRemoveDocument = (idx) =>
+    setUploadedDocs((prev) => prev.filter((_, i) => i !== idx));
+
+  const handleDocumentCategoryChange = (idx, category) =>
+    setUploadedDocs((prev) => prev.map((d, i) => (i === idx ? { ...d, category } : d)));
 
   const handleSubmitRfc = async (e) => {
     e.preventDefault();
@@ -599,8 +734,12 @@ function App() {
           .map((s) => s.trim())
           .filter(Boolean),
         estimated_downtime_hours: parseFloat(formData.estimated_downtime_hours),
-        document_token: uploadedDoc?.token || null,
-        document_filename: uploadedDoc?.filename || null,
+        documents: uploadedDocs.map((d) => ({
+          document_token: d.token,
+          filename: d.filename,
+          category: d.category,
+        })),
+        cr_type: crType || null,
         // Dev never needs a predecessor — send null rather than '' so the
         // backend's Optional[str] field stays clean either way.
         environment_predecessor_rfc_id: formData.environment_predecessor_rfc_id || null,
@@ -618,10 +757,11 @@ function App() {
         affected_systems: '',
         estimated_downtime_hours: 0,
         requestor_name: '',
-        environment: 'Dev',
+        environment: 'Production',
         environment_predecessor_rfc_id: '',
       });
-      setUploadedDoc(null);
+      setUploadedDocs([]);
+      setCrType('');
       setActiveTab('list');
       fetchRfcList();
     } catch (error) {
@@ -636,6 +776,8 @@ function App() {
       const response = await axios.get(`${API_BASE}/rfc/${rfc_id}`);
       setSelectedRfc(response.data);
       setCabSession(null);
+      setCabReadiness(null);
+      setCabReadinessModuleTab(0);
       setVisibleLogCount(0);
       setCabResultTab(response.data.cab_decision ? 'decision' : 'deliberation');
     } catch (error) {
@@ -643,20 +785,21 @@ function App() {
     }
   };
 
-  const handleMarkCompleted = async (rfc_id) => {
-    setLoading(true);
-    try {
-      await axios.post(`${API_BASE}/rfc/${rfc_id}/complete`);
-      showToast('RFC marked Completed — it can now serve as an environment-predecessor.', 'success');
-      const response = await axios.get(`${API_BASE}/rfc/${rfc_id}`);
-      setSelectedRfc(response.data);
-      fetchRfcList();
-    } catch (error) {
-      showToast(error.response?.data?.detail || 'Failed to mark RFC as Completed.', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // DISABLED - Environment-Staged Predecessor Gate feature disabled
+  // const handleMarkCompleted = async (rfc_id) => {
+  //   setLoading(true);
+  //   try {
+  //     await axios.post(`${API_BASE}/rfc/${rfc_id}/complete`);
+  //     showToast('RFC marked Completed — it can now serve as an environment-predecessor.', 'success');
+  //     const response = await axios.get(`${API_BASE}/rfc/${rfc_id}`);
+  //     setSelectedRfc(response.data);
+  //     fetchRfcList();
+  //   } catch (error) {
+  //     showToast(error.response?.data?.detail || 'Failed to mark RFC as Completed.', 'error');
+  //   } finally {
+  //     setLoading(false);
+  //   }
+  // };
 
   const handleTriggerCab = async (rfc_id) => {
     setLoading(true);
@@ -682,6 +825,20 @@ function App() {
       showToast(`CAB session failed: ${detail}`, 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCheckCabReadiness = async (rfc_id) => {
+    setCabReadinessLoading(true);
+    try {
+      const response = await axios.post(`${API_BASE}/api/cab/evaluate`, { rfc_id });
+      setCabReadiness(response.data);
+      setCabReadinessModuleTab(0);
+    } catch (error) {
+      const detail = error.response?.data?.detail || error.message;
+      showToast(`CAB readiness check failed: ${detail}`, 'error');
+    } finally {
+      setCabReadinessLoading(false);
     }
   };
 
@@ -1025,12 +1182,16 @@ function App() {
                       <span className={`badge type-${rfc.change_type.replace(/\s/g, '')}`}>
                         {rfc.change_type}
                       </span>
+                      {rfc.cr_type && (
+                        <span className="badge status-generic">{rfc.cr_type}</span>
+                      )}
                       <span className="badge status-generic">
                         {STATUS_ICONS[rfc.status] || ''} {rfc.status}
                       </span>
-                      {rfc.environment && (
+                      {/* Environment badge hidden - Environment-Staged Predecessor Gate disabled */}
+                      {/* {rfc.environment && (
                         <span className="badge status-generic">{rfc.environment}</span>
-                      )}
+                      )} */}
                     </div>
                     <p className="rfc-date">{timeAgo(rfc.created_at)}</p>
                   </div>
@@ -1050,32 +1211,60 @@ function App() {
             </p>
             <form onSubmit={handleSubmitRfc}>
               <div className="form-group">
-                <label>Supporting Document (PDF, Word, PowerPoint, or Excel — optional)</label>
+                <label>Supporting Documents (PDF, Word, PowerPoint, or Excel — optional)</label>
                 <p className="form-subtitle">
-                  Upload a BRD, FRD, PRD, or RFC document (.pdf, .docx, .pptx, .xlsx) — it will be used to pre-fill the fields below (review before submitting), and shared with the CAB agents during review.
+                  Upload BRDs, FRDs, PRDs, architecture diagrams, DPIAs, VAPT reports, or other RFC
+                  documents (.pdf, .docx, .pptx, .xlsx) — the first one will be used to pre-fill the
+                  fields below (review before submitting), and all of them are shared with the CAB
+                  agents during review. Tag each with a category to help the CAB Readiness Agent
+                  match it to the right checklist item.
                 </p>
-                {!uploadedDoc ? (
-                  <>
-                    <input
-                      type="file"
-                      accept={ALLOWED_DOC_ACCEPT}
-                      onChange={handleDocumentUpload}
-                      disabled={docParsing}
-                    />
-                    {docParsing && (
-                      <span className="btn-spinner-wrap">
-                        <span className="btn-spinner" /> Parsing document &amp; pre-filling fields...
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <div className="badge status-generic doc-attached">
-                    📎 {uploadedDoc.filename}
-                    <button type="button" className="doc-remove-btn" onClick={handleRemoveDocument}>
-                      Remove
-                    </button>
+                <input
+                  type="file"
+                  accept={ALLOWED_DOC_ACCEPT}
+                  onChange={handleDocumentUpload}
+                  disabled={docParsing}
+                  multiple
+                />
+                {docParsing && (
+                  <span className="btn-spinner-wrap">
+                    <span className="btn-spinner" /> Parsing document(s) &amp; pre-filling fields...
+                  </span>
+                )}
+                {uploadedDocs.length > 0 && (
+                  <div className="doc-attached-list">
+                    {uploadedDocs.map((doc, idx) => (
+                      <div key={doc.token} className="badge status-generic doc-attached">
+                        📎 {doc.filename}
+                        <select
+                          value={doc.category}
+                          onChange={(e) => handleDocumentCategoryChange(idx, e.target.value)}
+                        >
+                          {DOCUMENT_CATEGORIES.map((c) => (
+                            <option key={c.value} value={c.value}>{c.label}</option>
+                          ))}
+                        </select>
+                        <button type="button" className="doc-remove-btn" onClick={() => handleRemoveDocument(idx)}>
+                          Remove
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
+              </div>
+
+              <div className="form-group">
+                <label>CR Type (Infrastructure, Application, or Mixed — optional)</label>
+                <p className="form-subtitle">
+                  Determines which CAB Readiness checklist(s) apply. Leave unspecified to have the
+                  CAB Readiness Agent infer it from the title/description.
+                </p>
+                <select value={crType} onChange={(e) => setCrType(e.target.value)}>
+                  <option value="">-- Unspecified (infer automatically) --</option>
+                  <option value="infrastructure">Infrastructure</option>
+                  <option value="application">Application</option>
+                  <option value="mixed">Mixed</option>
+                </select>
               </div>
 
               <div className="form-group">
@@ -1126,7 +1315,9 @@ function App() {
                 />
               </div>
 
-              <div className="form-row">
+              {/* Environment and Predecessor fields HIDDEN - Environment-Staged Predecessor Gate disabled */}
+              {/* All RFCs now default to Production environment */}
+              {/* <div className="form-row">
                 <div className="form-group">
                   <label>Environment *</label>
                   <select
@@ -1172,7 +1363,7 @@ function App() {
                     </p>
                   </div>
                 )}
-              </div>
+              </div> */}
 
               <div className="form-row">
                 <div className="form-group">
@@ -1281,10 +1472,17 @@ function App() {
                   {selectedRfc.change_type}
                 </span>
               </div>
+              {selectedRfc.cr_type && (
+                <div className="meta-item">
+                  <strong>CR Type</strong>
+                  <span className="badge status-generic">{selectedRfc.cr_type}</span>
+                </div>
+              )}
               <div className="meta-item">
                 <strong>Status</strong>
                 <span className="badge status-generic">{selectedRfc.status}</span>
-                {selectedRfc.status !== 'Completed' && (
+                {/* Mark Completed button HIDDEN - Environment-Staged Predecessor Gate disabled */}
+                {/* {selectedRfc.status !== 'Completed' && (
                   <button
                     type="button"
                     className="btn-back"
@@ -1294,9 +1492,10 @@ function App() {
                   >
                     Mark Completed
                   </button>
-                )}
+                )} */}
               </div>
-              <div className="meta-item">
+              {/* Environment and Predecessor fields HIDDEN - Environment-Staged Predecessor Gate disabled */}
+              {/* <div className="meta-item">
                 <strong>Environment</strong>
                 <span className="badge status-generic">{selectedRfc.environment || 'Dev'}</span>
               </div>
@@ -1304,7 +1503,7 @@ function App() {
                 <div className="meta-item">
                   <strong>Predecessor RFC</strong> {selectedRfc.environment_predecessor_rfc_id}
                 </div>
-              )}
+              )} */}
               <div className="meta-item">
                 <strong>Impact</strong> {selectedRfc.impact}
               </div>
@@ -1323,11 +1522,25 @@ function App() {
                   <span>{selectedRfc.risk_level} / 5</span>
                 </div>
               )}
-              {selectedRfc.document_filename && (
+              {selectedRfc.documents && selectedRfc.documents.length > 0 ? (
                 <div className="meta-item">
-                  <strong>Supporting Document</strong>
-                  <span className="badge status-generic">📎 {selectedRfc.document_filename}</span>
+                  <strong>Supporting Documents</strong>
+                  <div className="doc-attached-list">
+                    {selectedRfc.documents.map((doc, idx) => (
+                      <span key={idx} className="badge status-generic">
+                        📎 {doc.filename}
+                        {doc.category && doc.category !== 'other' && ` (${doc.category})`}
+                      </span>
+                    ))}
+                  </div>
                 </div>
+              ) : (
+                selectedRfc.document_filename && (
+                  <div className="meta-item">
+                    <strong>Supporting Document</strong>
+                    <span className="badge status-generic">📎 {selectedRfc.document_filename}</span>
+                  </div>
+                )
               )}
             </div>
 
@@ -1569,6 +1782,29 @@ function App() {
                 </div>
               );
             })()}
+
+            <button
+              className="btn-primary"
+              style={{ marginTop: 16 }}
+              onClick={() => handleCheckCabReadiness(selectedRfc.id)}
+              disabled={cabReadinessLoading}
+            >
+              {cabReadinessLoading ? (
+                <span className="btn-spinner-wrap">
+                  <span className="btn-spinner" /> Evaluating Readiness...
+                </span>
+              ) : (
+                (cabReadiness || selectedRfc.cab_readiness_result) ? 'Re-check CAB Readiness' : 'Check CAB Readiness'
+              )}
+            </button>
+
+            {(cabReadiness || selectedRfc.cab_readiness_result) && (
+              <CabReadinessPanel
+                result={cabReadiness || selectedRfc.cab_readiness_result}
+                activeModuleTab={cabReadinessModuleTab}
+                onSelectModuleTab={setCabReadinessModuleTab}
+              />
+            )}
           </div>
         </div>
       )}

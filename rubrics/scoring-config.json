@@ -1,0 +1,7 @@
+{
+  "status_disclaimer": "TODO(criteria): interim scoring model — replace weights/thresholds once the real rubric is supplied.",
+  "state_scores": { "complete": 1, "partial": 0.5, "missing": 0, "not_applicable": null },
+  "default_area_weight": 1,
+  "module_status_thresholds": { "ready_min": 90, "conditional_min": 60 },
+  "overall_status_thresholds": { "ready_min": 90, "conditional_min": 60 }
+}

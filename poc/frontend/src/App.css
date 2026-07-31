@@ -758,6 +758,13 @@ body {
   gap: 10px;
 }
 
+.doc-attached-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .doc-remove-btn {
   background: none;
   border: none;
@@ -1538,6 +1545,35 @@ body {
   font-size: 0.78em;
   color: #999;
   margin: 0;
+}
+
+/* CAB Readiness Agent panel */
+
+.readiness-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.readiness-score {
+  font-size: 1.6em;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.readiness-area-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.readiness-area-item {
+  background: #fafafa;
+  border-left: 4px solid #d1d5db;
+  border-radius: 4px;
+  padding: 10px 12px;
 }
 
 /* ─────────────────────────────────────────────────────────────

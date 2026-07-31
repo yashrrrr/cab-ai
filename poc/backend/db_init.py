@@ -4,6 +4,7 @@ Database initialization and connection management for RFC PoC
 
 import sqlite3
 import os
+import uuid
 
 # Canonical environment values (brief 17.1) — kept as a Python constant here
 # purely for the f-string below; guardrails.py's PREDECESSOR_ENVIRONMENT
@@ -157,11 +158,31 @@ def init_db(db_path: str = "rfc_poc.db"):
             environment TEXT NOT NULL DEFAULT 'Dev',
             environment_predecessor_rfc_id TEXT,
             completed_at TEXT,
+            cr_type TEXT,
+            cab_readiness_result TEXT,
+            cab_readiness_evaluated_at TEXT,
             FOREIGN KEY(environment_predecessor_rfc_id) REFERENCES change_requests(id)
         )
     """)
 
     _create_environment_triggers(cursor)
+
+    # CAB Readiness Agent — per-document evidence, one row per uploaded file.
+    # A separate child table (rather than reshaping change_requests) keeps
+    # every existing positional-tuple-index read of change_requests rows
+    # (e.g. trigger_cab_review in main.py) valid without modification.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS rfc_documents (
+            id TEXT PRIMARY KEY,
+            rfc_id TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            path TEXT NOT NULL,
+            document_text TEXT,
+            category TEXT,
+            uploaded_at TEXT NOT NULL,
+            FOREIGN KEY(rfc_id) REFERENCES change_requests(id)
+        )
+    """)
 
     # Create CAB decisions table
     cursor.execute("""
@@ -255,6 +276,69 @@ def migrate_db(db_path: str = "rfc_poc.db"):
             try:
                 cursor.execute("ALTER TABLE change_requests ADD COLUMN completed_at TEXT")
                 print("[OK] Migration: added completed_at column")
+            except sqlite3.OperationalError:
+                pass
+
+        # CAB Readiness Agent columns — appended at the end of the column
+        # list so pre-existing positional-tuple-index reads elsewhere (e.g.
+        # trigger_cab_review in main.py) are unaffected by column order.
+        if "cr_type" not in existing_columns:
+            try:
+                cursor.execute("ALTER TABLE change_requests ADD COLUMN cr_type TEXT")
+                print("[OK] Migration: added cr_type column")
+            except sqlite3.OperationalError:
+                pass
+
+        if "cab_readiness_result" not in existing_columns:
+            try:
+                cursor.execute("ALTER TABLE change_requests ADD COLUMN cab_readiness_result TEXT")
+                print("[OK] Migration: added cab_readiness_result column")
+            except sqlite3.OperationalError:
+                pass
+
+        if "cab_readiness_evaluated_at" not in existing_columns:
+            try:
+                cursor.execute("ALTER TABLE change_requests ADD COLUMN cab_readiness_evaluated_at TEXT")
+                print("[OK] Migration: added cab_readiness_evaluated_at column")
+            except sqlite3.OperationalError:
+                pass
+
+        # rfc_documents: per-document evidence table for the CAB Readiness
+        # Agent (multi-document support). New table, not an ALTER, so a
+        # plain CREATE TABLE IF NOT EXISTS is sufficient and idempotent.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rfc_documents (
+                id TEXT PRIMARY KEY,
+                rfc_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                path TEXT NOT NULL,
+                document_text TEXT,
+                category TEXT,
+                uploaded_at TEXT NOT NULL,
+                FOREIGN KEY(rfc_id) REFERENCES change_requests(id)
+            )
+        """)
+
+        # Backfill: any pre-existing RFC that has a legacy single document
+        # but no rfc_documents row yet gets one row created from the legacy
+        # columns (category='other'). One-time, idempotent (guarded by the
+        # existence check), never deletes the legacy columns.
+        legacy_docs = cursor.execute("""
+            SELECT id, document_filename, document_path, document_text, created_at
+            FROM change_requests
+            WHERE document_filename IS NOT NULL
+        """).fetchall()
+        for rfc_id, filename, path, document_text, created_at in legacy_docs:
+            has_row = cursor.execute(
+                "SELECT 1 FROM rfc_documents WHERE rfc_id = ? LIMIT 1", (rfc_id,)
+            ).fetchone()
+            if has_row:
+                continue
+            try:
+                cursor.execute("""
+                    INSERT INTO rfc_documents (id, rfc_id, filename, path, document_text, category, uploaded_at)
+                    VALUES (?, ?, ?, ?, ?, 'other', ?)
+                """, (str(uuid.uuid4()), rfc_id, filename, path, document_text, created_at or ""))
             except sqlite3.OperationalError:
                 pass
 
@@ -545,7 +629,139 @@ RISK: Medium (well-tested fallback, clear rollback path)""",
     conn.close()
     print("[OK] Sample RFCs inserted")
 
+def insert_cab_readiness_fixtures():
+    """
+    Two fixture RFCs exercising the CAB Readiness Agent end-to-end:
+    - rfc-cab-infra-001: cr_type='infrastructure', has an architecture_diagram
+      document (some Module 1 evidence present) but no DPIA, and a
+      business_justification containing a dummy PII-looking string (not real
+      PII) to exercise pii_guardrail without any real personal data.
+    - rfc-cab-app-002: cr_type='application', has thin/boilerplate test_cases
+      text (exercises the "non-empty text is not automatically 'complete'"
+      rule) and one vapt_report document.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    fixtures = [
+        {
+            "id": "rfc-cab-infra-001",
+            "rfc_number": "CHG20260724006",
+            "title": "Provision new VPC and firewall for Region 2 expansion",
+            "description": (
+                "Business Justification: expand infrastructure capacity into Region 2 "
+                "to support growth. Problem Statement: current single-region setup "
+                "cannot meet projected Q4 load. Proposed Solution: provision a new VPC "
+                "with a vendor-hosted firewall. Expected Outcomes: 2x capacity headroom. "
+                "Stakeholder Impact: all Region 2 customers and the NOC team."
+            ),
+            "change_type": "Normal",
+            "impact": "2-Medium",
+            "priority": "Medium",
+            "risk_level": 3,
+            "status": "Submitted",
+            "auto_approved": 0,
+            "created_at": "2026-07-24T17:00:00",
+            "requestor_name": "Fiona Nakamura",
+            "affected_systems": "VPC, Firewall, NOC Dashboard",
+            "business_justification": "Reduce latency for Region 2 customers.",
+            "implementation_plan": "Provision VPC, configure vendor firewall, cut over DNS, decommission nothing (net-new).",
+            "test_cases": "Load test the new VPC path at 2x current peak traffic; validate firewall rule set against the security baseline.",
+            "back_out_plan": "Revert DNS to Region 1 endpoints; new VPC stays provisioned but unused.",
+            "estimated_downtime_hours": 0,
+            "cr_type": "infrastructure",
+        },
+        {
+            "id": "rfc-cab-app-002",
+            "rfc_number": "CHG20260724007",
+            "title": "Ship v3 of the customer self-service portal",
+            "description": (
+                "Business Justification: reduce support ticket volume. Problem "
+                "Statement: v2 portal lacks self-service password reset. Proposed "
+                "Solution: ship v3 with self-service flows. Expected Outcomes: 20% "
+                "fewer support tickets. Stakeholder Impact: all portal users."
+            ),
+            "change_type": "Normal",
+            "impact": "2-Medium",
+            "priority": "Medium",
+            "risk_level": 2,
+            "status": "Submitted",
+            "auto_approved": 0,
+            "created_at": "2026-07-24T17:30:00",
+            "requestor_name": "George Patel",
+            "affected_systems": "Customer Portal, Auth Service",
+            "business_justification": "Reduce support load and improve customer satisfaction scores.",
+            "implementation_plan": "Deploy v3 behind a feature flag, ramp traffic gradually.",
+            # Deliberately thin/boilerplate — exercises the "non-empty text is
+            # not automatically 'complete'" evaluation rule.
+            "test_cases": "Tested.",
+            "back_out_plan": "Disable the v3 feature flag to revert to v2.",
+            "estimated_downtime_hours": 0,
+            "cr_type": "application",
+        },
+    ]
+
+    documents = {
+        "rfc-cab-infra-001": [
+            {
+                "filename": "region2-architecture-diagram.pdf",
+                "category": "architecture_diagram",
+                # Deliberately includes an SSN-shaped placeholder (not a real
+                # identifier) to exercise pii_guardrail.scan_for_pii — no DPIA
+                # document is attached for this fixture, so this text is what
+                # the Data Privacy Assessment area's document-fallback match
+                # (no category match -> falls back to all documents) scans.
+                "text": "Region 2 network architecture: VPC 10.20.0.0/16, vendor-hosted firewall appliance at the edge, peering to Region 1 for shared services. On-call escalation reference: SSN 123-45-6789 (fixture placeholder, not a real identifier).",
+            },
+        ],
+        "rfc-cab-app-002": [
+            {
+                "filename": "portal-v3-vapt-report.pdf",
+                "category": "vapt_report",
+                "text": "VAPT summary for Customer Portal v3: no critical or high findings; 2 medium findings (rate limiting, verbose error messages) remediated prior to release.",
+            },
+        ],
+    }
+
+    for rfc in fixtures:
+        try:
+            cursor.execute("""
+                INSERT OR IGNORE INTO change_requests (
+                    id, rfc_number, title, description, change_type, impact, priority,
+                    risk_level, status, auto_approved, created_at, requestor_name,
+                    affected_systems, business_justification, estimated_downtime_hours,
+                    implementation_plan, test_cases, back_out_plan, cr_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                rfc["id"], rfc["rfc_number"], rfc["title"], rfc["description"],
+                rfc["change_type"], rfc["impact"], rfc["priority"], rfc["risk_level"],
+                rfc["status"], rfc["auto_approved"], rfc["created_at"], rfc["requestor_name"],
+                rfc["affected_systems"], rfc["business_justification"], rfc["estimated_downtime_hours"],
+                rfc["implementation_plan"], rfc["test_cases"], rfc["back_out_plan"], rfc["cr_type"],
+            ))
+        except sqlite3.IntegrityError:
+            pass  # Already exists
+
+        has_docs = cursor.execute(
+            "SELECT 1 FROM rfc_documents WHERE rfc_id = ? LIMIT 1", (rfc["id"],)
+        ).fetchone()
+        if not has_docs:
+            for doc in documents.get(rfc["id"], []):
+                cursor.execute("""
+                    INSERT INTO rfc_documents (id, rfc_id, filename, path, document_text, category, uploaded_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    str(uuid.uuid4()), rfc["id"], doc["filename"],
+                    f"fixtures/{rfc['id']}/{doc['filename']}", doc["text"], doc["category"],
+                    rfc["created_at"],
+                ))
+
+    conn.commit()
+    conn.close()
+    print("[OK] CAB Readiness fixture RFCs inserted")
+
 if __name__ == "__main__":
     init_db()
     migrate_db()
     insert_sample_rfcs()
+    insert_cab_readiness_fixtures()
