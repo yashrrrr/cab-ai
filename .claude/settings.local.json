@@ -53,7 +53,14 @@
       "Bash(node --max-old-space-size=3072 node_modules/.bin/react-scripts build)",
       "Bash(node --max-old-space-size=3072 node_modules/react-scripts/bin/react-scripts.js build)",
       "Bash(tasklist *)",
-      "Bash(jobs -l)"
+      "Bash(jobs -l)",
+      "Bash(OPENAI_API_KEY=dummy python -c ' *)",
+      "Bash(OPENAI_API_KEY=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 python -c ' *)",
+      "Bash(powershell -Command \"Get-Process -Id 8296 | Select-Object Path,StartTime\")",
+      "Bash(powershell -Command \"\\(Get-CimInstance Win32_Process -Filter 'ProcessId=8296'\\).CommandLine\")",
+      "Bash(powershell -Command \"\ntry {\n  \\\\$proc = Get-Process -Id 8296 -ErrorAction Stop\n  \\\\$proc.Path\n} catch { Write-Output 'access-denied-or-not-found' }\n\")",
+      "Bash(OPENAI_API_KEY=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 python -c ' *)",
+      "WebSearch"
     ]
   }
 }

@@ -116,6 +116,12 @@ def main():
     print(f"{'LiteLLM Version:':<20} {version}")
     print(f"{'Proxy URL:':<20} {base_url}")
 
+    # Budget duration note
+    print(f"\n{BLUE}Budget Duration:{NC}")
+    print("  Budget reset information is not available via API headers.")
+    print("  Contact your LiteLLM admin to check the budget_duration setting")
+    print("  (e.g., '1d', '7d', '30d', or 'monthly')")
+
     # Warnings
     if percent_used > 80:
         print(f"\n{RED}[!] Warning: Budget usage is above 80%{NC}")

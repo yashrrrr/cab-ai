@@ -16,25 +16,15 @@ const API_BASE = 'http://localhost:8002';
 // kept in sync with the theme's brand accent.
 const ACCENT_TEAL = '#0f6e56';
 
-// PDF, Word, PowerPoint, Excel — matches ALLOWED_DOCUMENT_EXTENSIONS in the
-// backend (poc/backend/main.py). Legacy binary formats (.doc, .ppt, .xls)
-// aren't supported.
-const ALLOWED_DOC_EXTENSIONS = ['.pdf', '.docx', '.pptx', '.xlsx'];
-const ALLOWED_DOC_ACCEPT =
-  '.pdf,.docx,.pptx,.xlsx,application/pdf,' +
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document,' +
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation,' +
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-
-// CAB Readiness checklist evidence categories — matches the free-text
-// `category` column on rfc_documents (poc/backend/db_init.py).
-const DOCUMENT_CATEGORIES = [
-  { value: 'other', label: 'Other' },
-  { value: 'architecture_diagram', label: 'Architecture Diagram' },
-  { value: 'dpia', label: 'DPIA (Data Privacy Impact Assessment)' },
-  { value: 'vapt_report', label: 'VAPT Report' },
-  { value: 'test_signoff', label: 'Test Sign-off' },
-  { value: 'brd_frd', label: 'BRD / FRD' },
+// File type definitions for enhanced upload component
+const FILE_TYPES = [
+  { value: 'frd', label: 'FRD (Functional Requirements)', icon: '📋', accept: '.pdf,.docx', color: '#0f6e56' },
+  { value: 'prd', label: 'PRD (Product Requirements)', icon: '📄', accept: '.pdf,.docx', color: '#2563eb' },
+  { value: 'brd', label: 'BRD (Business Requirements)', icon: '📊', accept: '.pdf,.docx', color: '#7c3aed' },
+  { value: 'pdf', label: 'PDF Document', icon: '📕', accept: '.pdf', color: '#dc2626' },
+  { value: 'docx', label: 'Word Document', icon: '📘', accept: '.docx', color: '#2563eb' },
+  { value: 'pptx', label: 'PowerPoint Presentation', icon: '📙', accept: '.pptx', color: '#f59e0b' },
+  { value: 'xlsx', label: 'Excel Spreadsheet', icon: '📗', accept: '.xlsx', color: '#059669' },
 ];
 
 const STATUS_ICONS = {
@@ -79,6 +69,206 @@ function StatCard({ label, value, tone }) {
     <div className={`stat-card stat-${tone}`}>
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
+    </div>
+  );
+}
+
+// Enhanced file upload components
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function FileDropZone({
+  row,
+  onFilesAdded,
+  onDragOver,
+  onDragLeave,
+  onRemoveFile,
+}) {
+  const inputRef = useRef(null);
+  const fileTypeDef = FILE_TYPES.find((t) => t.value === row.fileType);
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    onDragOver(row.id, false);
+    const dropped = Array.from(e.dataTransfer.files);
+    if (dropped.length) onFilesAdded(row.id, dropped);
+  };
+
+  const handleChange = (e) => {
+    const picked = Array.from(e.target.files ?? []);
+    if (picked.length) onFilesAdded(row.id, picked);
+    e.target.value = '';
+  };
+
+  return (
+    <div className="file-upload-zone-wrapper">
+      <div
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); onDragOver(row.id, true); }}
+        onDragLeave={() => onDragLeave(row.id)}
+        onDrop={handleDrop}
+        className={`file-drop-zone ${row.dragOver ? 'drag-over' : ''}`}
+        style={{
+          '--file-type-color': fileTypeDef.color,
+        }}
+      >
+        <div
+          className="file-icon-box"
+          style={{ backgroundColor: `${fileTypeDef.color}15` }}
+        >
+          {fileTypeDef.icon}
+        </div>
+        <div className="file-drop-text">
+          <p className="file-drop-main">
+            Drop {fileTypeDef.label} files here
+          </p>
+          <p className="file-drop-sub">
+            or <span style={{ color: fileTypeDef.color }} className="browse-link">click to browse</span>
+            <span className="separator">·</span>
+            <span className="accept-format">
+              {fileTypeDef.accept}
+            </span>
+          </p>
+        </div>
+        <div className="upload-arrow">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M8 2v9M4.5 7.5 8 4l3.5 3.5M2 12.5h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept={fileTypeDef.accept}
+          style={{ display: 'none' }}
+          onChange={handleChange}
+        />
+      </div>
+
+      {row.files.length > 0 && (
+        <div className="uploaded-files-list">
+          {row.files.map((f) => (
+            <div key={f.id} className="uploaded-file-item">
+              <div
+                className="file-icon-small"
+                style={{ backgroundColor: `${fileTypeDef.color}15` }}
+              >
+                {fileTypeDef.icon}
+              </div>
+              <span className="file-name">{f.name}</span>
+              <span className="file-size">{formatBytes(f.size)}</span>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onRemoveFile(row.id, f.id); }}
+                className="file-remove-btn-icon"
+                title="Remove file"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M1 1l8 8M9 1 1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UploadRow({
+  row,
+  index,
+  isLast,
+  onTypeChange,
+  onFilesAdded,
+  onDragOver,
+  onDragLeave,
+  onRemoveFile,
+  onRemoveRow,
+  showRemove,
+}) {
+  const fileTypeDef = FILE_TYPES.find((t) => t.value === row.fileType);
+
+  return (
+    <div className="upload-row-container">
+      {!isLast && <div className="upload-row-connector" />}
+
+      <div className="upload-row-content">
+        <div className="upload-row-step">
+          <div
+            className="step-dot"
+            style={{
+              borderColor: fileTypeDef ? fileTypeDef.color : '#cbd5e1',
+              backgroundColor: fileTypeDef ? `${fileTypeDef.color}12` : '#f8fafc',
+              color: fileTypeDef ? fileTypeDef.color : '#94a3b8',
+            }}
+          >
+            {index + 1}
+          </div>
+        </div>
+
+        <div className="upload-row-main">
+          <div className="upload-row-header">
+            <div className="file-type-select-wrapper">
+              <select
+                value={row.fileType}
+                onChange={(e) => onTypeChange(row.id, e.target.value)}
+                className="file-type-select"
+                style={{
+                  borderColor: fileTypeDef ? `${fileTypeDef.color}50` : '#e2e8f0',
+                }}
+              >
+                <option value="" disabled>Select file type…</option>
+                {FILE_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.icon}  {t.label}
+                  </option>
+                ))}
+              </select>
+              <div className="select-arrow">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 3.5 5 7l3-3.5" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+            </div>
+
+            {fileTypeDef && (
+              <span
+                className="file-type-badge"
+                style={{ backgroundColor: `${fileTypeDef.color}12`, color: fileTypeDef.color }}
+              >
+                {fileTypeDef.label}
+              </span>
+            )}
+
+            {showRemove && (
+              <button
+                type="button"
+                onClick={() => onRemoveRow(row.id)}
+                className="remove-row-btn"
+                title="Remove row"
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 7h10M5 4l-3 3 3 3M9 4l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
+          </div>
+
+          {row.fileType && (
+            <FileDropZone
+              row={row}
+              onFilesAdded={onFilesAdded}
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              onRemoveFile={onRemoveFile}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -628,6 +818,11 @@ function App() {
   // Explicit CR type — routes which CAB Readiness checklist module(s) apply.
   const [crType, setCrType] = useState('');
 
+  // Enhanced file upload state
+  const uploadRowIdCounterRef = useRef(0);
+  const nextUploadRowId = () => `upload-row-${++uploadRowIdCounterRef.current}`;
+  const [uploadRows, setUploadRows] = useState([{ id: nextUploadRowId(), fileType: '', files: [], dragOver: false }]);
+
   useEffect(() => {
     fetchRfcList();
     // fetchRfcList is stable for our purposes; run once on mount.
@@ -668,35 +863,50 @@ function App() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleDocumentUpload = async (e) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = ''; // allow re-selecting the same file later (e.g. after Remove)
-    if (files.length === 0) return;
+  // Enhanced upload handlers
+  const addUploadRow = () => {
+    setUploadRows((prev) => [...prev, { id: nextUploadRowId(), fileType: '', files: [], dragOver: false }]);
+  };
 
-    const badFile = files.find(
-      (file) => !ALLOWED_DOC_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))
-    );
-    if (badFile) {
-      showToast(
-        'Unsupported file type. Please upload PDF, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) documents.',
-        'error'
-      );
-      return;
-    }
+  const removeUploadRow = (rowId) => {
+    setUploadRows((prev) => prev.filter((r) => r.id !== rowId));
+  };
+
+  const setUploadFileType = (rowId, type) => {
+    setUploadRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, fileType: type, files: [] } : r)));
+  };
+
+  const addFilesToUploadRow = async (rowId, files) => {
+    const fileTypeDef = FILE_TYPES.find((t) => uploadRows.find((r) => r.id === rowId)?.fileType === t.value);
+    if (!fileTypeDef) return;
 
     setDocParsing(true);
     try {
       for (const file of files) {
         const body = new FormData();
         body.append('file', file);
+        body.append('category', fileTypeDef.value);
+
         const response = await axios.post(`${API_BASE}/rfc/upload-document`, body, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        const { document_token, filename, extracted_fields } = response.data;
-        setUploadedDocs((prev) => [...prev, { token: document_token, filename, category: 'other' }]);
 
-        const hasFields = extracted_fields && Object.keys(extracted_fields).length > 0;
-        if (hasFields) {
+        const { document_token, filename, extracted_fields } = response.data;
+
+        setUploadedDocs((prev) => [
+          ...prev,
+          { token: document_token, filename, category: fileTypeDef.value },
+        ]);
+
+        setUploadRows((prev) =>
+          prev.map((r) =>
+            r.id === rowId
+              ? { ...r, files: [...r.files, { name: filename, size: file.size, id: `${filename}-${Date.now()}` }] }
+              : r
+          )
+        );
+
+        if (uploadedDocs.length === 0 && extracted_fields) {
           setFormData((prev) => ({
             ...prev,
             ...extracted_fields,
@@ -706,21 +916,30 @@ function App() {
           }));
           showToast(`Parsed ${filename} — review the pre-filled fields below.`, 'success');
         } else {
-          showToast(`${filename} attached — couldn't auto-detect fields, please fill in manually.`, 'success');
+          showToast(`${filename} attached successfully.`, 'success');
         }
       }
     } catch (error) {
-      showToast(error.response?.data?.detail || 'Failed to parse document.', 'error');
+      showToast(error.response?.data?.detail || 'Failed to upload document.', 'error');
     } finally {
       setDocParsing(false);
     }
   };
 
-  const handleRemoveDocument = (idx) =>
-    setUploadedDocs((prev) => prev.filter((_, i) => i !== idx));
+  const setUploadRowDragOver = (rowId, over) => {
+    setUploadRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, dragOver: over } : r)));
+  };
 
-  const handleDocumentCategoryChange = (idx, category) =>
-    setUploadedDocs((prev) => prev.map((d, i) => (i === idx ? { ...d, category } : d)));
+  const removeFileFromUploadRow = (rowId, fileId) => {
+    const row = uploadRows.find((r) => r.id === rowId);
+    const file = row?.files.find((f) => f.id === fileId);
+    if (file) {
+      setUploadedDocs((prev) => prev.filter((d) => d.filename !== file.name));
+    }
+    setUploadRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, files: r.files.filter((f) => f.id !== fileId) } : r))
+    );
+  };
 
   const handleSubmitRfc = async (e) => {
     e.preventDefault();
@@ -1213,44 +1432,55 @@ function App() {
               <div className="form-group">
                 <label>Supporting Documents (PDF, Word, PowerPoint, or Excel — optional)</label>
                 <p className="form-subtitle">
-                  Upload BRDs, FRDs, PRDs, architecture diagrams, DPIAs, VAPT reports, or other RFC
-                  documents (.pdf, .docx, .pptx, .xlsx) — the first one will be used to pre-fill the
-                  fields below (review before submitting), and all of them are shared with the CAB
-                  agents during review. Tag each with a category to help the CAB Readiness Agent
-                  match it to the right checklist item.
+                  Upload BRDs, FRDs, PRDs, or other RFC documents. Select a file type for each category,
+                  then drop or browse files into the upload zone. The first document will be used to
+                  pre-fill the fields below (review before submitting).
                 </p>
-                <input
-                  type="file"
-                  accept={ALLOWED_DOC_ACCEPT}
-                  onChange={handleDocumentUpload}
-                  disabled={docParsing}
-                  multiple
-                />
+
                 {docParsing && (
                   <span className="btn-spinner-wrap">
                     <span className="btn-spinner" /> Parsing document(s) &amp; pre-filling fields...
                   </span>
                 )}
-                {uploadedDocs.length > 0 && (
-                  <div className="doc-attached-list">
-                    {uploadedDocs.map((doc, idx) => (
-                      <div key={doc.token} className="badge status-generic doc-attached">
-                        📎 {doc.filename}
-                        <select
-                          value={doc.category}
-                          onChange={(e) => handleDocumentCategoryChange(idx, e.target.value)}
-                        >
-                          {DOCUMENT_CATEGORIES.map((c) => (
-                            <option key={c.value} value={c.value}>{c.label}</option>
-                          ))}
-                        </select>
-                        <button type="button" className="doc-remove-btn" onClick={() => handleRemoveDocument(idx)}>
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+
+                <div style={{ marginTop: '16px' }}>
+                  {uploadRows.map((row, i) => (
+                    <UploadRow
+                      key={row.id}
+                      row={row}
+                      index={i}
+                      isLast={i === uploadRows.length - 1}
+                      onTypeChange={setUploadFileType}
+                      onFilesAdded={addFilesToUploadRow}
+                      onDragOver={setUploadRowDragOver}
+                      onDragLeave={(id) => setUploadRowDragOver(id, false)}
+                      onRemoveFile={removeFileFromUploadRow}
+                      onRemoveRow={removeUploadRow}
+                      showRemove={uploadRows.length > 1}
+                    />
+                  ))}
+
+                  <button
+                    type="button"
+                    onClick={addUploadRow}
+                    className="add-upload-row-btn"
+                  >
+                    <div className="add-row-icon">
+                      <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+                        <path d="M5.5 1v9M1 5.5h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                      </svg>
+                    </div>
+                    Add another file type
+                  </button>
+
+                  {uploadedDocs.length > 0 && (
+                    <div className="upload-summary">
+                      <span className="upload-summary-text">
+                        <strong>{uploadedDocs.length}</strong> file{uploadedDocs.length !== 1 ? 's' : ''} ready to submit
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="form-group">
@@ -1268,7 +1498,7 @@ function App() {
               </div>
 
               <div className="form-group">
-                <label>RFC Title *</label>
+                <label>Change Type *</label>
                 <input
                   type="text"
                   name="title"
@@ -1430,7 +1660,7 @@ function App() {
                     <span className="btn-spinner" /> Submitting...
                   </span>
                 ) : (
-                  'Submit Change Request'
+                  'Verify CAB Readiness'
                 )}
               </button>
             </form>
