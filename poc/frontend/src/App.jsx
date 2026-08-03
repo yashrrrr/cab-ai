@@ -9,7 +9,7 @@ import {
   downloadRegisterPdf,
 } from './pdfExport';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://localhost:8001';
 
 // Matches the --accent CSS variable in App.css. Chart bars are drawn with an
 // inline style (not a CSS class), so this is the one JS-side color constant
@@ -39,6 +39,25 @@ function timeAgo(dateString) {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
+}
+
+// Vibrant, bold treatment for recent activity — a pulsing dot + accent color
+// for anything in the last 5 minutes, so "just now" actually jumps out
+// instead of blending into the same gray as a 3-week-old timestamp.
+function TimeBadge({ date, label }) {
+  if (!date) return null;
+  const mins = Math.floor((Date.now() - new Date(date).getTime()) / 60000);
+  const isRecent = mins < 5;
+  const text = timeAgo(date);
+  return (
+    <span
+      className={`time-badge ${isRecent ? 'time-badge-recent' : ''}`}
+      title={new Date(date).toLocaleString()}
+    >
+      {isRecent && <span className="time-badge-dot" />}
+      {label ? `${label} ${text}` : text}
+    </span>
+  );
 }
 
 function Toast({ toast, onClose }) {
@@ -788,7 +807,7 @@ function App() {
             title="Go to RFC Register"
             aria-label="Go to RFC Register"
           >
-            <img className="brand-logo" src="/assets/ust-logo.svg" alt="UST logo" />
+            <img className="brand-logo" src="/assets/ust-logo.png" alt="UST logo" />
           </button>
           <div>
             <h1>Change Advisory Board Platform</h1>
@@ -835,7 +854,7 @@ function App() {
                       <div className="notif-item-title">{r.title}</div>
                       <div className="notif-item-meta">
                         <span className="badge status-generic">{r.status}</span>
-                        <span className="notif-time">{timeAgo(r.created_at)}</span>
+                        <TimeBadge date={r.reviewed_at || r.created_at} />
                       </div>
                     </div>
                   ))
@@ -991,7 +1010,10 @@ function App() {
                         {STATUS_ICONS[rfc.status] || ''} {rfc.status}
                       </span>
                     </div>
-                    <p className="rfc-date">{timeAgo(rfc.created_at)}</p>
+                    <div className="rfc-date-row">
+                      <TimeBadge date={rfc.created_at} label="Submitted" />
+                      {rfc.reviewed_at && <TimeBadge date={rfc.reviewed_at} label="Reviewed" />}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1218,6 +1240,16 @@ function App() {
                 <div className="meta-item">
                   <strong>Supporting Document</strong>
                   <span className="badge status-generic">📎 {selectedRfc.document_filename}</span>
+                </div>
+              )}
+              <div className="meta-item">
+                <strong>Submitted</strong>
+                <TimeBadge date={selectedRfc.created_at} />
+              </div>
+              {selectedRfc.reviewed_at && (
+                <div className="meta-item">
+                  <strong>Reviewed</strong>
+                  <TimeBadge date={selectedRfc.reviewed_at} />
                 </div>
               )}
             </div>
