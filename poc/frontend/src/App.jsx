@@ -2017,21 +2017,6 @@ function App() {
               );
             })()}
 
-            <button
-              className="btn-primary"
-              style={{ marginTop: 16 }}
-              onClick={() => handleCheckCabReadiness(selectedRfc.id)}
-              disabled={cabReadinessLoading}
-            >
-              {cabReadinessLoading ? (
-                <span className="btn-spinner-wrap">
-                  <span className="btn-spinner" /> Evaluating Readiness...
-                </span>
-              ) : (
-                (cabReadiness || selectedRfc.cab_readiness_result) ? 'Re-check CAB Readiness' : 'Check CAB Readiness'
-              )}
-            </button>
-
             {(cabReadiness || selectedRfc.cab_readiness_result) && (
               <CabReadinessPanel
                 result={cabReadiness || selectedRfc.cab_readiness_result}
