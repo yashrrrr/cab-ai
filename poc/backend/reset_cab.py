@@ -43,7 +43,7 @@ def show_state(conn):
 
 def reset(conn, rfc_numbers=None):
     """Reset all reviewed RFCs, or only the given rfc_numbers."""
-    fields = "status='Submitted', cab_decision=NULL, cab_reasoning=NULL, cab_flags=NULL"
+    fields = "status='Submitted', cab_decision=NULL, cab_reasoning=NULL, cab_flags=NULL, reviewed_at=NULL"
     if rfc_numbers:
         placeholders = ",".join("?" for _ in rfc_numbers)
         sql = f"UPDATE change_requests SET {fields} WHERE rfc_number IN ({placeholders})"

@@ -109,6 +109,7 @@ class RFCResponse(BaseModel):
     back_out_plan: Optional[str] = None
     cab_flags: Optional[List[dict]] = None
     document_filename: Optional[str] = None
+    reviewed_at: Optional[str] = None
 
 class CABSessionRequest(BaseModel):
     rfc_id: str
@@ -346,7 +347,8 @@ async def get_rfc(rfc_id: str):
         business_justification=row[18],
         estimated_downtime_hours=row[19],
         cab_flags=cab_flags,
-        document_filename=row["document_filename"]
+        document_filename=row["document_filename"],
+        reviewed_at=row["reviewed_at"]
     )
 
 @app.post("/rfc/{rfc_id}/trigger-cab")
@@ -397,13 +399,14 @@ async def trigger_cab_review(rfc_id: str):
         raise HTTPException(status_code=500, detail=f"CAB session failed: {str(e)}")
 
     # Update DB with decision + flags
+    reviewed_at = datetime.now().isoformat()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE change_requests
-        SET status = ?, cab_decision = ?, cab_reasoning = ?, cab_flags = ?
+        SET status = ?, cab_decision = ?, cab_reasoning = ?, cab_flags = ?, reviewed_at = ?
         WHERE id = ?
-    """, ("CAB Reviewed", cab_decision, cab_reasoning, json.dumps(cab_flags), rfc_id))
+    """, ("CAB Reviewed", cab_decision, cab_reasoning, json.dumps(cab_flags), reviewed_at, rfc_id))
     conn.commit()
     conn.close()
 
@@ -413,7 +416,8 @@ async def trigger_cab_review(rfc_id: str):
         "cab_reasoning": cab_reasoning,
         "agent_logs": agent_logs,
         "cab_flags": cab_flags,
-        "status": "CAB Reviewed"
+        "status": "CAB Reviewed",
+        "reviewed_at": reviewed_at
     }
 
 @app.get("/rfc-list")
@@ -421,7 +425,10 @@ async def list_rfcs():
     """List all RFCs"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, rfc_number, title, change_type, status, created_at FROM change_requests ORDER BY created_at DESC")
+    cursor.execute(
+        "SELECT id, rfc_number, title, change_type, status, created_at, reviewed_at "
+        "FROM change_requests ORDER BY created_at DESC"
+    )
     rows = cursor.fetchall()
     conn.close()
 
@@ -433,7 +440,8 @@ async def list_rfcs():
                 "title": row[2],
                 "change_type": row[3],
                 "status": row[4],
-                "created_at": row[5]
+                "created_at": row[5],
+                "reviewed_at": row[6]
             }
             for row in rows
         ]

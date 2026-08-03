@@ -37,7 +37,8 @@ def init_db(db_path: str = "rfc_poc.db"):
             cab_flags TEXT,
             document_filename TEXT,
             document_path TEXT,
-            document_text TEXT
+            document_text TEXT,
+            reviewed_at TEXT
         )
     """)
 
@@ -111,6 +112,16 @@ def migrate_db(db_path: str = "rfc_poc.db"):
                 except sqlite3.OperationalError:
                     # Another process added it concurrently ("duplicate column name") — safe to ignore
                     pass
+
+        # Add reviewed_at column if it does not exist yet — set when a CAB
+        # review completes, so the UI can show "Reviewed just now" etc.
+        if "reviewed_at" not in existing_columns:
+            try:
+                cursor.execute("ALTER TABLE change_requests ADD COLUMN reviewed_at TEXT")
+                print("[OK] Migration: added reviewed_at column")
+            except sqlite3.OperationalError:
+                # Another process added it concurrently ("duplicate column name") — safe to ignore
+                pass
 
         conn.commit()
     finally:

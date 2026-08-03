@@ -378,26 +378,6 @@ function getInitialSidebarCollapsed() {
   return localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true';
 }
 
-// Placeholder — static content only, no data wiring yet.
-function DashboardPage() {
-  const placeholders = [
-    { label: 'Total Requests', value: '—' },
-    { label: 'Approved This Month', value: '—' },
-    { label: 'Avg. Turnaround', value: '—' },
-    { label: 'Open Items', value: '—' },
-  ];
-  return (
-    <div className="content fade-in">
-      <h2>Dashboard</h2>
-      <p className="form-subtitle">Placeholder page — real metrics coming soon.</p>
-      <div className="stats-row">
-        {placeholders.map((p) => (
-          <StatCard key={p.label} label={p.label} value={p.value} tone="neutral" />
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // Placeholder — UI shell only, submission isn't wired up yet.
 function RfcRequestPage() {
@@ -893,14 +873,6 @@ function App() {
             >
               <span className="sidebar-nav-icon">➕</span>
               <span className="sidebar-nav-label">Submit Change Request</span>
-            </button>
-            <button
-              className={`sidebar-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setActiveTab('dashboard')}
-              title="Dashboard"
-            >
-              <span className="sidebar-nav-icon">📊</span>
-              <span className="sidebar-nav-label">Dashboard</span>
             </button>
             <button
               className={`sidebar-nav-item ${activeTab === 'rfcRequest' ? 'active' : ''}`}
@@ -1495,8 +1467,6 @@ function App() {
           </div>
         </div>
       )}
-
-      {activeTab === 'dashboard' && <DashboardPage />}
 
       {activeTab === 'rfcRequest' && <RfcRequestPage />}
 
