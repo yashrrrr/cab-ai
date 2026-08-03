@@ -3,14 +3,13 @@ RFC Lifecycle PoC Backend — FastAPI + AI CAB Orchestration
 Demonstrates deterministic classification + multi-agent CAB deliberation
 """
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 import json
-import logging
 import uuid
 import sqlite3
 import os
@@ -18,13 +17,9 @@ import shutil
 import glob
 
 from cab_orchestrator import run_ai_cab_session
-import cab_readiness
 from classification import classify_rfc, evaluate_no_impact, match_scc
 from db_init import init_db, migrate_db, get_db_connection
 from document_extraction import extract_document_text, extract_rfc_fields
-from guardrails import environment_predecessor_gate_error
-
-logger = logging.getLogger("cab_readiness")
 
 # Supporting-document uploads: files land in uploads/tmp/{token}{ext} until
 # the RFC they're paired with is created, then move to uploads/{rfc_id}/.
@@ -77,27 +72,6 @@ class PriorityEnum(str, Enum):
     MODERATE = "Moderate"
     LOW = "Low"
 
-class EnvironmentEnum(str, Enum):
-    """Brief section 3.4/17.1 — every RFC carries one of these."""
-    DEV = "Dev"
-    QA = "QA"
-    PRODUCTION = "Production"
-
-class CRTypeEnum(str, Enum):
-    """CAB Readiness Agent — determines which checklist module(s) apply.
-    Distinct from ChangeTypeEnum (an unrelated ITIL classification)."""
-    INFRASTRUCTURE = "infrastructure"
-    APPLICATION = "application"
-    MIXED = "mixed"
-
-class RFCDocumentRef(BaseModel):
-    """One entry in RFCSubmissionRequest.documents — pairs an uploaded file
-    (from POST /rfc/upload-document) with this RFC, optionally tagged with
-    the checklist evidence category it represents."""
-    document_token: str
-    filename: Optional[str] = None
-    category: Optional[str] = "other"
-
 class RFCSubmissionRequest(BaseModel):
     title: str
     description: str
@@ -109,17 +83,8 @@ class RFCSubmissionRequest(BaseModel):
     affected_systems: List[str]  # ["ServiceA", "ServiceB"]
     estimated_downtime_hours: Optional[float] = 0
     requestor_name: str
-    documents: Optional[List[RFCDocumentRef]] = None  # multi-document support (CAB Readiness Agent)
-    # Legacy singular fields — still accepted for any caller mid-flight during
-    # rollout; submit_rfc() normalizes these into `documents` when present.
-    document_token: Optional[str] = None
-    document_filename: Optional[str] = None
-    cr_type: Optional[CRTypeEnum] = None  # explicit infra/application/mixed; None -> inferred later by CAB Readiness Agent
-    # Environment-Staged Predecessor Gate (brief 3.4/5.4/17.1). Every RFC
-    # carries an environment; defaults to Dev (the one tier that never needs
-    # a predecessor) so existing callers that omit it stay unaffected.
-    environment: Optional[EnvironmentEnum] = EnvironmentEnum.DEV
-    environment_predecessor_rfc_id: Optional[str] = None  # required by the gate when environment is QA/Production and type != Emergency
+    document_token: Optional[str] = None  # from POST /rfc/upload-document, pairs the uploaded PDF with this RFC
+    document_filename: Optional[str] = None  # original filename, echoed back from the upload response
 
 class RFCResponse(BaseModel):
     id: str
@@ -143,13 +108,8 @@ class RFCResponse(BaseModel):
     test_cases: Optional[str] = None
     back_out_plan: Optional[str] = None
     cab_flags: Optional[List[dict]] = None
-    document_filename: Optional[str] = None  # legacy first-doc mirror — kept for old UI code paths
-    documents: Optional[List[dict]] = None  # [{filename, category}], from rfc_documents
-    cr_type: Optional[str] = None
-    cab_readiness_result: Optional[dict] = None
-    environment: EnvironmentEnum = EnvironmentEnum.DEV
-    environment_predecessor_rfc_id: Optional[str] = None
-    completed_at: Optional[str] = None
+    document_filename: Optional[str] = None
+    reviewed_at: Optional[str] = None
 
 class CABSessionRequest(BaseModel):
     rfc_id: str
@@ -177,17 +137,12 @@ async def health():
     return {"status": "ok"}
 
 @app.post("/rfc/upload-document")
-async def upload_document(file: UploadFile = File(...), category: str = Form("other")):
+async def upload_document(file: UploadFile = File(...)):
     """
     Upload a supporting document (PDF, Word, PowerPoint, or Excel) ahead of
     RFC submission. Extracts text and asks the LLM to suggest values for the
     submission form fields. Returns a document_token to pass back on
     /rfc/submit so the file gets paired with the created RFC.
-
-    `category` optionally tags which CAB Readiness checklist area this
-    document is evidence for (e.g. "architecture_diagram", "dpia",
-    "vapt_report") — the frontend calls this endpoint once per selected
-    file when multiple documents are attached. Defaults to "other".
     """
     filename = file.filename or "document"
     ext = os.path.splitext(filename.lower())[1]
@@ -215,7 +170,6 @@ async def upload_document(file: UploadFile = File(...), category: str = Form("ot
         "document_token": document_token,
         "filename": filename,
         "extracted_fields": extracted_fields,
-        "category": category,
     }
 
 @app.post("/rfc/submit", response_model=RFCResponse)
@@ -266,112 +220,56 @@ async def submit_rfc(req: RFCSubmissionRequest):
             status = "Escalated to CAB (Ambiguous No Impact)"
             req.change_type = ChangeTypeEnum.NORMAL
 
-    # Pair uploaded supporting document(s) (if any) with this RFC — moves each
+    # Pair an uploaded supporting document (if any) with this RFC — moves the
     # temp file from uploads/tmp/ into a per-RFC folder and re-extracts text
     # (cheap, and avoids trusting a client-supplied cache of the text). The
     # temp file's extension isn't known here (PDF/Word/PowerPoint/Excel), so
     # find it by token rather than assuming .pdf.
-    #
-    # Normalize legacy singular document_token/document_filename (still
-    # accepted for any caller mid-flight during rollout) into the same
-    # `documents` list shape so there's one code path below.
-    doc_refs = list(req.documents) if req.documents else []
-    if not doc_refs and req.document_token:
-        doc_refs = [RFCDocumentRef(document_token=req.document_token, filename=req.document_filename, category="other")]
-
-    processed_documents = []  # [{filename, path, text, category}]
-    for doc_ref in doc_refs:
-        matches = glob.glob(os.path.join(UPLOAD_TMP_DIR, f"{doc_ref.document_token}.*"))
+    document_filename = None
+    document_path = None
+    document_text = None
+    if req.document_token:
+        matches = glob.glob(os.path.join(UPLOAD_TMP_DIR, f"{req.document_token}.*"))
         tmp_path = matches[0] if matches else None
-        if not (tmp_path and os.path.exists(tmp_path)):
-            # A missing/expired temp file (e.g. stale token) is not an error —
-            # that document is simply skipped.
-            continue
-        ext = os.path.splitext(tmp_path)[1]
-        safe_name = os.path.basename(doc_ref.filename or f"document{ext}") or f"document{ext}"
-        if not safe_name.lower().endswith(ext):
-            safe_name += ext
-        rfc_upload_dir = os.path.join(UPLOAD_DIR, rfc_id)
-        os.makedirs(rfc_upload_dir, exist_ok=True)
-        final_path = os.path.join(rfc_upload_dir, safe_name)
-        shutil.move(tmp_path, final_path)
-        try:
-            doc_text = extract_document_text(final_path, safe_name)
-        except Exception:
-            doc_text = None
-        processed_documents.append({
-            "filename": safe_name,
-            "path": final_path,
-            "text": doc_text,
-            "category": doc_ref.category or "other",
-        })
-
-    # Legacy singular columns mirror the first successfully processed
-    # document — keeps trigger_cab_review's row["document_text"] read (and
-    # any other legacy document_text reader) working unmodified.
-    first_doc = processed_documents[0] if processed_documents else None
-    document_filename = first_doc["filename"] if first_doc else None
-    document_path = first_doc["path"] if first_doc else None
-    document_text = first_doc["text"] if first_doc else None
-
-    environment = (req.environment or EnvironmentEnum.DEV).value
-    cr_type_value = req.cr_type.value if req.cr_type else None
+        if tmp_path and os.path.exists(tmp_path):
+            ext = os.path.splitext(tmp_path)[1]
+            safe_name = os.path.basename(req.document_filename or f"document{ext}") or f"document{ext}"
+            if not safe_name.lower().endswith(ext):
+                safe_name += ext
+            rfc_upload_dir = os.path.join(UPLOAD_DIR, rfc_id)
+            os.makedirs(rfc_upload_dir, exist_ok=True)
+            final_path = os.path.join(rfc_upload_dir, safe_name)
+            shutil.move(tmp_path, final_path)
+            document_filename = safe_name
+            document_path = final_path
+            try:
+                document_text = extract_document_text(final_path, safe_name)
+            except Exception:
+                document_text = None
+        # A missing/expired temp file (e.g. stale token) is not an error —
+        # the RFC is simply submitted without a paired document.
 
     # Persist to DB
     conn = get_db_connection()
     cursor = conn.cursor()
-
-    # Environment-Staged Predecessor Gate DISABLED
-    # The predecessor gate validation is temporarily disabled
-    # gate_error = environment_predecessor_gate_error(
-    #     cursor, environment, req.change_type.value, req.environment_predecessor_rfc_id
-    # )
-    # if gate_error:
-    #     conn.close()
-    #     raise HTTPException(status_code=400, detail=gate_error)
-
-    try:
-        cursor.execute("""
-            INSERT INTO change_requests (
-                id, rfc_number, title, description, change_type, impact, priority,
-                risk_level, status, auto_approved, created_at, requestor_name,
-                affected_systems, implementation_plan, test_cases, back_out_plan,
-                business_justification, estimated_downtime_hours,
-                document_filename, document_path, document_text,
-                environment, environment_predecessor_rfc_id, cr_type
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            rfc_id, rfc_number, req.title, req.description, req.change_type.value,
-            impact.value, priority.value, risk_level, status, auto_approved,
-            datetime.now().isoformat(), req.requestor_name,
-            json.dumps(req.affected_systems), req.implementation_plan,
-            req.test_cases, req.back_out_plan, req.business_justification,
-            req.estimated_downtime_hours,
-            document_filename, document_path, document_text,
-            environment, req.environment_predecessor_rfc_id, cr_type_value
-        ))
-
-        for doc in processed_documents:
-            cursor.execute("""
-                INSERT INTO rfc_documents (id, rfc_id, filename, path, document_text, category, uploaded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                str(uuid.uuid4()), rfc_id, doc["filename"], doc["path"], doc["text"],
-                doc["category"], datetime.now().isoformat()
-            ))
-
-        conn.commit()
-    except sqlite3.IntegrityError as e:
-        # Backstop: trg_environment_predecessor_gate rejected the insert even
-        # though the pre-check above passed (e.g. the predecessor was
-        # concurrently un-completed between the check and the insert). Any
-        # other IntegrityError (e.g. a rfc_number collision) is unrelated to
-        # this guardrail and should surface as before this feature existed.
-        if "environment_predecessor_gate" in str(e):
-            raise HTTPException(status_code=400, detail=f"Rejected by database guardrail: {e}")
-        raise
-    finally:
-        conn.close()
+    cursor.execute("""
+        INSERT INTO change_requests (
+            id, rfc_number, title, description, change_type, impact, priority,
+            risk_level, status, auto_approved, created_at, requestor_name,
+            affected_systems, implementation_plan, test_cases, back_out_plan,
+            business_justification, estimated_downtime_hours,
+            document_filename, document_path, document_text
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        rfc_id, rfc_number, req.title, req.description, req.change_type.value,
+        impact.value, priority.value, risk_level, status, auto_approved,
+        datetime.now().isoformat(), req.requestor_name,
+        json.dumps(req.affected_systems), req.implementation_plan,
+        req.test_cases, req.back_out_plan, req.business_justification,
+        req.estimated_downtime_hours,
+        document_filename, document_path, document_text
+    ))
+    conn.commit()
 
     created_at = datetime.now().isoformat()
     return RFCResponse(
@@ -395,11 +293,7 @@ async def submit_rfc(req: RFCSubmissionRequest):
         implementation_plan=req.implementation_plan,
         test_cases=req.test_cases,
         back_out_plan=req.back_out_plan,
-        document_filename=document_filename,
-        documents=[{"filename": d["filename"], "category": d["category"]} for d in processed_documents],
-        cr_type=cr_type_value,
-        environment=EnvironmentEnum(environment),
-        environment_predecessor_rfc_id=req.environment_predecessor_rfc_id
+        document_filename=document_filename
     )
 
 @app.get("/rfc/{rfc_id}", response_model=RFCResponse)
@@ -431,23 +325,6 @@ async def get_rfc(rfc_id: str):
     except Exception:
         cab_flags = []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT filename, category FROM rfc_documents WHERE rfc_id = ? ORDER BY uploaded_at",
-        (rfc_id,)
-    )
-    documents = [{"filename": d["filename"], "category": d["category"]} for d in cursor.fetchall()]
-    conn.close()
-
-    cab_readiness_result = None
-    raw_readiness = row["cab_readiness_result"]
-    if raw_readiness:
-        try:
-            cab_readiness_result = json.loads(raw_readiness)
-        except Exception:
-            cab_readiness_result = None
-
     return RFCResponse(
         id=row[0],
         rfc_number=row[1],
@@ -471,65 +348,8 @@ async def get_rfc(rfc_id: str):
         estimated_downtime_hours=row[19],
         cab_flags=cab_flags,
         document_filename=row["document_filename"],
-        documents=documents,
-        cr_type=row["cr_type"],
-        cab_readiness_result=cab_readiness_result,
-        environment=EnvironmentEnum(row["environment"] or "Dev"),
-        environment_predecessor_rfc_id=row["environment_predecessor_rfc_id"],
-        completed_at=row["completed_at"]
+        reviewed_at=row["reviewed_at"]
     )
-
-# ENDPOINT DISABLED - Environment-Staged Predecessor Gate feature disabled
-# @app.post("/rfc/{rfc_id}/complete")
-# async def complete_rfc(rfc_id: str, actor: str = "system"):
-#     """
-#     Mark an RFC 'Completed'.
-#
-#     The brief's Environment-Staged Predecessor Gate (3.4/5.4) requires a
-#     predecessor RFC to reach status='Completed' before a same-type RFC can
-#     be created one environment stage up — but nothing in this POC's existing
-#     lifecycle (Submitted -> Auto-Approved/CAB Reviewed/Escalated) ever
-#     reaches Completed. This minimal endpoint is what makes the predecessor
-#     chain reachable/demonstrable; it intentionally does not re-implement the
-#     full ITIL Implement/Close lifecycle, which is out of scope here.
-#
-#     Guard: an RFC the CAB explicitly rejected cannot be marked Completed —
-#     "Completed" is meant to mean the change actually happened, not just
-#     that someone clicked the button, and a rejected change was never
-#     implemented. This does NOT re-implement Section 5.3's full guardrail
-#     suite (out of scope) — it only closes the one gap directly relevant to
-#     this gate's integrity: a rejected predecessor should never be able to
-#     unlock a same-type RFC one environment stage up.
-#     """
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-#     cursor.execute("SELECT id, status, cab_decision FROM change_requests WHERE id = ?", (rfc_id,))
-#     row = cursor.fetchone()
-#     if not row:
-#         conn.close()
-#         raise HTTPException(status_code=404, detail="RFC not found")
-#
-#     if row["cab_decision"] == "Rejected":
-#         conn.close()
-#         raise HTTPException(
-#             status_code=400,
-#             detail="This RFC was rejected by CAB and cannot be marked Completed.",
-#         )
-#
-#     completed_at = datetime.now().isoformat()
-#     cursor.execute(
-#         "UPDATE change_requests SET status = 'Completed', completed_at = ? WHERE id = ?",
-#         (completed_at, rfc_id),
-#     )
-#     cursor.execute(
-#         "INSERT INTO audit_log (id, rfc_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?, ?)",
-#         (str(uuid.uuid4()), rfc_id, "completed", actor, completed_at,
-#          "Marked Completed — eligible to serve as an environment-predecessor for a same-type RFC one stage up."),
-#     )
-#     conn.commit()
-#     conn.close()
-#
-#     return {"rfc_id": rfc_id, "status": "Completed", "completed_at": completed_at}
 
 @app.post("/rfc/{rfc_id}/trigger-cab")
 async def trigger_cab_review(rfc_id: str):
@@ -579,13 +399,14 @@ async def trigger_cab_review(rfc_id: str):
         raise HTTPException(status_code=500, detail=f"CAB session failed: {str(e)}")
 
     # Update DB with decision + flags
+    reviewed_at = datetime.now().isoformat()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE change_requests
-        SET status = ?, cab_decision = ?, cab_reasoning = ?, cab_flags = ?
+        SET status = ?, cab_decision = ?, cab_reasoning = ?, cab_flags = ?, reviewed_at = ?
         WHERE id = ?
-    """, ("CAB Reviewed", cab_decision, cab_reasoning, json.dumps(cab_flags), rfc_id))
+    """, ("CAB Reviewed", cab_decision, cab_reasoning, json.dumps(cab_flags), reviewed_at, rfc_id))
     conn.commit()
     conn.close()
 
@@ -595,64 +416,19 @@ async def trigger_cab_review(rfc_id: str):
         "cab_reasoning": cab_reasoning,
         "agent_logs": agent_logs,
         "cab_flags": cab_flags,
-        "status": "CAB Reviewed"
+        "status": "CAB Reviewed",
+        "reviewed_at": reviewed_at
     }
-
-class CABReadinessRequest(BaseModel):
-    rfc_id: str
-
-@app.post("/api/cab/evaluate")
-async def evaluate_cab_readiness(req: CABReadinessRequest):
-    """
-    Run the CAB Readiness Agent (deterministic checklist/scoring evaluation,
-    see poc/backend/cab_readiness.py) for one RFC. Separate from
-    /rfc/{rfc_id}/trigger-cab (the AI CAB deliberation feature) — this is
-    additive readiness scoring, not a decision.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM change_requests WHERE id = ?", (req.rfc_id,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="RFC not found")
-
-    cursor.execute(
-        "SELECT filename, path, document_text, category FROM rfc_documents WHERE rfc_id = ? ORDER BY uploaded_at",
-        (req.rfc_id,),
-    )
-    documents = [dict(d) for d in cursor.fetchall()]
-    conn.close()
-
-    try:
-        result = cab_readiness.evaluate(row, documents)
-    except Exception as e:
-        logger.error("CAB readiness evaluation failed: %s: %s", type(e).__name__, str(e))
-        raise HTTPException(status_code=500, detail="CAB readiness evaluation failed")
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE change_requests SET cab_readiness_result = ?, cab_readiness_evaluated_at = ? WHERE id = ?",
-        (json.dumps(result), result["evaluatedAt"], req.rfc_id),
-    )
-    conn.commit()
-    conn.close()
-
-    logger.info(json.dumps({
-        "rfc_id": req.rfc_id,
-        "overallStatus": result["overallStatus"],
-        "moduleCount": len(result["modules"]),
-    }))
-
-    return result
 
 @app.get("/rfc-list")
 async def list_rfcs():
     """List all RFCs"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, rfc_number, title, change_type, status, created_at, environment, cr_type FROM change_requests ORDER BY created_at DESC")
+    cursor.execute(
+        "SELECT id, rfc_number, title, change_type, status, created_at, reviewed_at "
+        "FROM change_requests ORDER BY created_at DESC"
+    )
     rows = cursor.fetchall()
     conn.close()
 
@@ -665,8 +441,7 @@ async def list_rfcs():
                 "change_type": row[3],
                 "status": row[4],
                 "created_at": row[5],
-                "environment": row[6],
-                "cr_type": row[7]
+                "reviewed_at": row[6]
             }
             for row in rows
         ]
@@ -687,4 +462,4 @@ async def list_scc():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

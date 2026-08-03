@@ -42,6 +42,25 @@ function timeAgo(dateString) {
   return `${days}d ago`;
 }
 
+// Vibrant, bold treatment for recent activity — a pulsing dot + accent color
+// for anything in the last 5 minutes, so "just now" actually jumps out
+// instead of blending into the same gray as a 3-week-old timestamp.
+function TimeBadge({ date, label }) {
+  if (!date) return null;
+  const mins = Math.floor((Date.now() - new Date(date).getTime()) / 60000);
+  const isRecent = mins < 5;
+  const text = timeAgo(date);
+  return (
+    <span
+      className={`time-badge ${isRecent ? 'time-badge-recent' : ''}`}
+      title={new Date(date).toLocaleString()}
+    >
+      {isRecent && <span className="time-badge-dot" />}
+      {label ? `${label} ${text}` : text}
+    </span>
+  );
+}
+
 function Toast({ toast, onClose }) {
   useEffect(() => {
     if (!toast) return;
@@ -687,26 +706,6 @@ function getInitialSidebarCollapsed() {
   return localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true';
 }
 
-// Placeholder — static content only, no data wiring yet.
-function DashboardPage() {
-  const placeholders = [
-    { label: 'Total Requests', value: '—' },
-    { label: 'Approved This Month', value: '—' },
-    { label: 'Avg. Turnaround', value: '—' },
-    { label: 'Open Items', value: '—' },
-  ];
-  return (
-    <div className="content fade-in">
-      <h2>Dashboard</h2>
-      <p className="form-subtitle">Placeholder page — real metrics coming soon.</p>
-      <div className="stats-row">
-        {placeholders.map((p) => (
-          <StatCard key={p.label} label={p.label} value={p.value} tone="neutral" />
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // Placeholder — UI shell only, submission isn't wired up yet.
 function RfcRequestPage() {
@@ -1202,7 +1201,7 @@ function App() {
             title="Go to RFC Register"
             aria-label="Go to RFC Register"
           >
-            <img className="brand-logo" src="/assets/ust-logo.svg" alt="UST logo" />
+            <img className="brand-logo" src="/assets/ust-logo.png" alt="UST logo" />
           </button>
           <div>
             <h1>Change Advisory Board Platform</h1>
@@ -1249,7 +1248,7 @@ function App() {
                       <div className="notif-item-title">{r.title}</div>
                       <div className="notif-item-meta">
                         <span className="badge status-generic">{r.status}</span>
-                        <span className="notif-time">{timeAgo(r.created_at)}</span>
+                        <TimeBadge date={r.reviewed_at || r.created_at} />
                       </div>
                     </div>
                   ))
@@ -1288,14 +1287,6 @@ function App() {
             >
               <span className="sidebar-nav-icon">➕</span>
               <span className="sidebar-nav-label">Submit Change Request</span>
-            </button>
-            <button
-              className={`sidebar-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setActiveTab('dashboard')}
-              title="Dashboard"
-            >
-              <span className="sidebar-nav-icon">📊</span>
-              <span className="sidebar-nav-label">Dashboard</span>
             </button>
             <button
               className={`sidebar-nav-item ${activeTab === 'rfcRequest' ? 'active' : ''}`}
@@ -1412,7 +1403,10 @@ function App() {
                         <span className="badge status-generic">{rfc.environment}</span>
                       )} */}
                     </div>
-                    <p className="rfc-date">{timeAgo(rfc.created_at)}</p>
+                    <div className="rfc-date-row">
+                      <TimeBadge date={rfc.created_at} label="Submitted" />
+                      {rfc.reviewed_at && <TimeBadge date={rfc.reviewed_at} label="Reviewed" />}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1772,6 +1766,16 @@ function App() {
                   </div>
                 )
               )}
+              <div className="meta-item">
+                <strong>Submitted</strong>
+                <TimeBadge date={selectedRfc.created_at} />
+              </div>
+              {selectedRfc.reviewed_at && (
+                <div className="meta-item">
+                  <strong>Reviewed</strong>
+                  <TimeBadge date={selectedRfc.reviewed_at} />
+                </div>
+              )}
             </div>
 
             <div className="detail-section">
@@ -2038,8 +2042,6 @@ function App() {
           </div>
         </div>
       )}
-
-      {activeTab === 'dashboard' && <DashboardPage />}
 
       {activeTab === 'rfcRequest' && <RfcRequestPage />}
 
