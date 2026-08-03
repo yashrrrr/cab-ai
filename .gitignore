@@ -120,3 +120,4 @@ poc/frontend/.env.production.local
 coverage/
 .coverage
 htmlcov/
+.claude/settings.local.json
