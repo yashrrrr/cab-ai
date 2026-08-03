@@ -9,7 +9,7 @@ import {
   downloadRegisterPdf,
 } from './pdfExport';
 
-const API_BASE = 'http://localhost:8002';
+const API_BASE = 'http://localhost:8000';
 
 // Matches the --accent CSS variable in App.css. Chart bars are drawn with an
 // inline style (not a CSS class), so this is the one JS-side color constant
