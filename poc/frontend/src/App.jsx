@@ -1478,7 +1478,7 @@ function App() {
               </div>
 
               <div className="form-group">
-                <label>CR Type (Infrastructure, Application, or Mixed — optional)</label>
+                <label>CR Type (Infrastructure or Application — optional)</label>
                 <p className="form-subtitle">
                   Determines which CAB Readiness checklist(s) apply. Leave unspecified to have the
                   CAB Readiness Agent infer it from the title/description.
@@ -1487,7 +1487,6 @@ function App() {
                   <option value="">-- Unspecified (infer automatically) --</option>
                   <option value="infrastructure">Infrastructure</option>
                   <option value="application">Application</option>
-                  <option value="mixed">Mixed</option>
                 </select>
               </div>
 
