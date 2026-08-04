@@ -10,16 +10,40 @@ import json
 from typing import Tuple, List, Dict
 import os
 
-# Initialize OpenAI client with GitHub endpoint
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("OPENAI_API_KEY environment variable not set")
+# Initialize OpenAI client
+# Try to load from .env file first
+env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+if os.path.exists(env_path):
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('OPENAI_API_KEY='):
+                os.environ['OPENAI_API_KEY'] = line.split('=', 1)[1].strip().strip('"').strip("'")
+                break
 
-# GitHub Models API endpoint
-client = OpenAI(
-    api_key=api_key,
-    base_url="https://models.inference.ai.azure.com"
-)
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key or api_key == "YOUR_" + "OPENAI_" + "API_KEY_HERE":
+    raise ValueError(
+        "OPENAI_API_KEY environment variable not set or using placeholder value.\n\n"
+        "⚠️  GitHub Models was retired on July 30, 2026.\n"
+        "    You MUST use an OpenAI API key instead.\n\n"
+        "To fix this:\n"
+        "1. Get an API key from: https://platform.openai.com/api-keys\n"
+        "2. Update OPENAI_API_KEY in poc/.env file\n"
+        "3. Make sure the key starts with 'sk' + '-'\n"
+    )
+
+# Validate that it's an OpenAI key
+if api_key.startswith("github_" + "pat_") or api_key.startswith("ghp" + "_"):
+    raise ValueError(
+        "GitHub Models API was retired on July 30, 2026.\n\n"
+        "Please update your OPENAI_API_KEY in poc/.env to use an OpenAI key instead.\n"
+        "Get your key from: https://platform.openai.com/api-keys\n"
+    )
+
+# Initialize OpenAI client
+print("Using OpenAI API")
+client = OpenAI(api_key=api_key)
 
 # ─────────────────────────────────────────────────────────────
 # Agent Personas (System Prompts)
@@ -349,7 +373,9 @@ Output ONLY a JSON array (no prose, no markdown fences) of objects with exactly 
                 "recommendation": recommendation.strip(),
             })
         return consolidated if consolidated else flags
-    except Exception:
+    except Exception as e:
+        # Log but don't fail - consolidation is a display nicety
+        print(f"Warning: Flag consolidation failed: {e}")
         return flags
 
 
@@ -516,23 +542,36 @@ RFC SUMMARY:
 {FLAG_INSTRUCTION}
 Your assessment:"""
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": persona["system_prompt"]
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        max_tokens=500,
-        temperature=0.7
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": persona["system_prompt"]
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
 
-    return response.choices[0].message.content
+        return response.choices[0].message.content
+    except Exception as e:
+        error_msg = str(e)
+        if "401" in error_msg or "unauthorized" in error_msg.lower():
+            raise ValueError(
+                f"Authentication failed: {error_msg}\n\n"
+                "TROUBLESHOOTING:\n"
+                "1. Check your GitHub token has 'Models' permission enabled\n"
+                "2. Generate a new token at: https://github.com/settings/tokens/new\n"
+                "3. OR use an OpenAI API key instead (set OPENAI_API_KEY=sk" + "-...)\n"
+                "4. Update the OPENAI_API_KEY in poc/.env file"
+            )
+        raise
 
 # ─────────────────────────────────────────────────────────────
 # Helper: Synthesize Decision (OpenAI API call)
@@ -565,23 +604,36 @@ RFC SUMMARY:
 {FLAG_INSTRUCTION}
 Your decision (include: decision, key concerns, conditions/blockers, recommendations):"""
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": AGENT_PERSONAS["chair"]["system_prompt"]
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        max_tokens=800,
-        temperature=0.7
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": AGENT_PERSONAS["chair"]["system_prompt"]
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            max_tokens=800,
+            temperature=0.7
+        )
 
-    return response.choices[0].message.content
+        return response.choices[0].message.content
+    except Exception as e:
+        error_msg = str(e)
+        if "401" in error_msg or "unauthorized" in error_msg.lower():
+            raise ValueError(
+                f"Authentication failed: {error_msg}\n\n"
+                "TROUBLESHOOTING:\n"
+                "1. Check your GitHub token has 'Models' permission enabled\n"
+                "2. Generate a new token at: https://github.com/settings/tokens/new\n"
+                "3. OR use an OpenAI API key instead (set OPENAI_API_KEY=sk" + "-...)\n"
+                "4. Update the OPENAI_API_KEY in poc/.env file"
+            )
+        raise
 
 # ─────────────────────────────────────────────────────────────
 # Helper: Parse Decision
